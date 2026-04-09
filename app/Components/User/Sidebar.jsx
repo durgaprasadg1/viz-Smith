@@ -29,7 +29,7 @@ const navItems = [
   { icon: LayoutDashboard, label: "Dashboard", href: "/dashboard" },
   { icon: Upload, label: "Upload", href: "/upload" },
   { icon: History, label: "History", href: "/history" },
-  { icon: Share2, label: "Export Center", href: "/exports" },
+  // { icon: Share2, label: "", href: ""},
 ];
 
 export default function Sidebar() {

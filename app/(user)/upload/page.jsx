@@ -1,19 +1,572 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { createSupabaseClient } from "@/lib/supabase";
 import useAuth from "@/hooks/useAuth";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { Separator } from "@/components/ui/separator";
+import { toast } from "sonner";
+import {
+  BarChart,
+  Bar,
+  LineChart,
+  Line,
+  PieChart,
+  Pie,
+  Cell,
+  ScatterChart,
+  Scatter,
+  AreaChart,
+  Area,
+  CartesianGrid,
+  XAxis,
+  YAxis,
+  Tooltip,
+  Legend,
+} from "recharts";
 
 const supabase = createSupabaseClient();
+
+const CHART_COLORS = [
+  "#22D3EE",
+  "#8B5CF6",
+  "#F472B6",
+  "#34D399",
+  "#F59E0B",
+  "#60A5FA",
+];
+
+const CHART_INITIAL_DIMENSION = {
+  width: 480,
+  height: 256,
+};
+
+const CHART_TYPE_ALIAS = {
+  bar: "bar",
+  barchart: "bar",
+  column: "bar",
+  columnchart: "bar",
+  verticalbar: "bar",
+  horizontalbar: "horizontalBar",
+  horizontalbarchart: "horizontalBar",
+  rankingbar: "horizontalBar",
+  line: "line",
+  linechart: "line",
+  trend: "line",
+  timeseries: "line",
+  area: "area",
+  areachart: "area",
+  scatter: "scatter",
+  scatterplot: "scatter",
+  bubble: "scatter",
+  pie: "pie",
+  piechart: "pie",
+  donut: "donut",
+  doughnut: "donut",
+  donutchart: "donut",
+  histogram: "histogram",
+  hist: "histogram",
+  multiline: "multiLine",
+  multilinechart: "multiLine",
+  multiseriesline: "multiLine",
+  stackedbar: "stackedBar",
+  stackedbarchart: "stackedBar",
+};
+
+const INVALID_COLUMN_HEADER_PATTERNS = [
+  /^__EMPTY(?:_\d+)?$/i,
+  /^Unnamed(?::\s*\d+)?$/i,
+];
+
+function normalizeLabel(value) {
+  if (value === null || value === undefined) return "";
+  return String(value).trim();
+}
+
+function isIgnoredColumnName(value) {
+  const name = normalizeLabel(value);
+  if (!name) return true;
+
+  return INVALID_COLUMN_HEADER_PATTERNS.some((pattern) => pattern.test(name));
+}
+
+function normalizeChartType(value) {
+  const normalized = String(value || "")
+    .toLowerCase()
+    .replace(/[^a-z]/g, "");
+  return CHART_TYPE_ALIAS[normalized] || "bar";
+}
+
+function toNumber(value) {
+  if (value === null || value === undefined || value === "") return null;
+  if (typeof value === "number") return Number.isFinite(value) ? value : null;
+  if (typeof value !== "string") return null;
+  const n = Number(String(value).replace(/,/g, ""));
+  return Number.isFinite(n) ? n : null;
+}
+
+function buildBarData(rows, categoryKey, valueKey) {
+  if (!categoryKey) return [];
+  const countTotals = new Map();
+  const numericTotals = new Map();
+  let numericHits = 0;
+
+  rows.forEach((row) => {
+    const category = normalizeLabel(row?.[categoryKey]);
+    if (!category) return;
+    countTotals.set(category, (countTotals.get(category) || 0) + 1);
+
+    if (!valueKey) return;
+    const numeric = toNumber(row?.[valueKey]);
+    if (numeric === null) return;
+    numericHits += 1;
+    numericTotals.set(category, (numericTotals.get(category) || 0) + numeric);
+  });
+
+  const source = valueKey && numericHits > 0 ? numericTotals : countTotals;
+  return Array.from(source.entries())
+    .map(([name, value]) => ({ name, value }))
+    .sort((a, b) => b.value - a.value)
+    .slice(0, 24);
+}
+
+function buildTimeSeriesData(rows, xKey, yKey) {
+  if (!xKey || !yKey) return [];
+
+  const points = rows
+    .map((row) => {
+      const xValue = row?.[xKey];
+      const yValue = toNumber(row?.[yKey]);
+      if (
+        xValue === null ||
+        xValue === undefined ||
+        xValue === "" ||
+        yValue === null
+      ) {
+        return null;
+      }
+      const parsed = Date.parse(String(xValue));
+      return {
+        name: String(xValue),
+        value: yValue,
+        sort: Number.isNaN(parsed) ? null : parsed,
+      };
+    })
+    .filter(Boolean);
+
+  const hasDates = points.every((point) => point.sort !== null);
+  if (hasDates) {
+    points.sort((a, b) => a.sort - b.sort);
+  }
+
+  return points.map(({ name, value }) => ({ name, value }));
+}
+
+function buildScatterData(rows, xKey, yKey) {
+  if (!xKey || !yKey) return [];
+  return rows
+    .map((row) => {
+      const xValue = toNumber(row?.[xKey]);
+      const yValue = toNumber(row?.[yKey]);
+      if (xValue === null || yValue === null) return null;
+      return { x: xValue, y: yValue };
+    })
+    .filter(Boolean);
+}
+
+function buildHistogramData(rows, valueKey, binCount = 8) {
+  if (!valueKey) return [];
+  const values = rows
+    .map((row) => toNumber(row?.[valueKey]))
+    .filter((value) => value !== null);
+
+  if (!values.length) return [];
+
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  if (min === max) {
+    return [{ name: `${min}`, value: values.length }];
+  }
+
+  const step = (max - min) / binCount;
+  const bins = Array.from({ length: binCount }, (_, index) => ({
+    min: min + index * step,
+    max: min + (index + 1) * step,
+    count: 0,
+  }));
+
+  values.forEach((value) => {
+    let index = Math.floor((value - min) / step);
+    if (index < 0) index = 0;
+    if (index >= binCount) index = binCount - 1;
+    bins[index].count += 1;
+  });
+
+  return bins.map((bin) => ({
+    name: `${bin.min.toFixed(2)}-${bin.max.toFixed(2)}`,
+    value: bin.count,
+  }));
+}
+
+function buildMultiSeriesData(rows, keys) {
+  const [xKey, ...seriesKeys] = keys;
+  if (!xKey || !seriesKeys.length) return { data: [], seriesKeys: [] };
+  const activeSeries = new Set();
+
+  const data = rows
+    .map((row) => {
+      const nameValue = normalizeLabel(row?.[xKey]);
+      if (!nameValue) return null;
+      const entry = { name: nameValue };
+      let hasValue = false;
+      seriesKeys.forEach((key) => {
+        const numeric = toNumber(row?.[key]);
+        if (numeric !== null) {
+          entry[key] = numeric;
+          activeSeries.add(key);
+          hasValue = true;
+        }
+      });
+      return hasValue ? entry : null;
+    })
+    .filter(Boolean);
+
+  return {
+    data,
+    seriesKeys: seriesKeys.filter((key) => activeSeries.has(key)),
+  };
+}
+
+function normalizeRelationshipColumns(rawColumns, columnSet) {
+  const values = Array.isArray(rawColumns)
+    ? rawColumns
+    : typeof rawColumns === "string"
+      ? rawColumns.split(",")
+      : [];
+
+  const deduped = [];
+  values.forEach((col) => {
+    const value = normalizeLabel(col);
+    if (!value) return;
+    if (isIgnoredColumnName(value)) return;
+    if (columnSet.size && !columnSet.has(value)) return;
+    if (!deduped.includes(value)) deduped.push(value);
+  });
+
+  return deduped;
+}
+
+function buildPreparedCharts(relationships, rows, columns) {
+  const safeRelationships = Array.isArray(relationships) ? relationships : [];
+  const safeRows = Array.isArray(rows) ? rows : [];
+  const columnSet = new Set(Array.isArray(columns) ? columns : []);
+  const prepared = [];
+  let skipped = 0;
+
+  safeRelationships.forEach((relationship, index) => {
+    const relColumns = normalizeRelationshipColumns(
+      relationship?.columns,
+      columnSet,
+    );
+    const primary = relColumns[0];
+    const secondary = relColumns[1];
+    const chartType = normalizeChartType(relationship?.chartType);
+    let renderType = chartType;
+    let chartData = [];
+    let seriesKeys = [];
+
+    if (chartType === "bar" || chartType === "horizontalBar") {
+      chartData = buildBarData(safeRows, primary, secondary);
+    } else if (chartType === "line" || chartType === "area") {
+      chartData = buildTimeSeriesData(safeRows, primary, secondary);
+      if (!chartData.length) {
+        chartData = buildBarData(safeRows, primary, secondary);
+        renderType = "bar";
+      }
+    } else if (chartType === "scatter") {
+      chartData = buildScatterData(safeRows, primary, secondary);
+      if (!chartData.length) {
+        chartData = buildBarData(safeRows, primary, secondary);
+        renderType = "bar";
+      }
+    } else if (chartType === "pie" || chartType === "donut") {
+      chartData = buildBarData(safeRows, primary, secondary);
+    } else if (chartType === "histogram") {
+      chartData = buildHistogramData(safeRows, secondary || primary);
+      if (!chartData.length) {
+        chartData = buildBarData(safeRows, primary, secondary);
+        renderType = "bar";
+      }
+    } else if (chartType === "multiLine" || chartType === "stackedBar") {
+      const multi = buildMultiSeriesData(safeRows, relColumns);
+      chartData = multi.data;
+      seriesKeys = multi.seriesKeys;
+      if (!chartData.length || !seriesKeys.length) {
+        chartData = buildBarData(safeRows, primary, secondary);
+        renderType = "bar";
+        seriesKeys = [];
+      }
+    } else {
+      chartData = buildBarData(safeRows, primary, secondary);
+      renderType = "bar";
+    }
+
+    if (!chartData.length) {
+      skipped += 1;
+      return;
+    }
+
+    prepared.push({
+      key: `${chartType}-${primary || "na"}-${secondary || "na"}-${index}`,
+      title: relationship?.title || relColumns.join(" vs ") || "Untitled",
+      description: relationship?.description || relationship?.rationale || "",
+      chartType,
+      renderType,
+      primary,
+      secondary,
+      chartData,
+      seriesKeys,
+    });
+  });
+
+  return {
+    charts: prepared,
+    skipped,
+  };
+}
+
+function ChartViewport({ children }) {
+  const containerRef = useRef(null);
+  const [size, setSize] = useState(CHART_INITIAL_DIMENSION);
+
+  useEffect(() => {
+    if (!containerRef.current || typeof ResizeObserver === "undefined") return;
+
+    const updateSize = (width, height) => {
+      const nextWidth = Math.max(
+        Math.round(width),
+        CHART_INITIAL_DIMENSION.width,
+      );
+      const nextHeight = Math.max(
+        Math.round(height),
+        CHART_INITIAL_DIMENSION.height,
+      );
+
+      setSize((current) => {
+        if (current.width === nextWidth && current.height === nextHeight) {
+          return current;
+        }
+
+        return {
+          width: nextWidth,
+          height: nextHeight,
+        };
+      });
+    };
+
+    const initialRect = containerRef.current.getBoundingClientRect();
+    if (initialRect.width > 0 || initialRect.height > 0) {
+      updateSize(initialRect.width, initialRect.height);
+    }
+
+    const observer = new ResizeObserver(([entry]) => {
+      if (!entry) return;
+      updateSize(entry.contentRect.width, entry.contentRect.height);
+    });
+
+    observer.observe(containerRef.current);
+
+    return () => {
+      observer.disconnect();
+    };
+  }, []);
+
+  return (
+    <div ref={containerRef} className="h-64 w-full min-w-0">
+      {children(size)}
+    </div>
+  );
+}
+
+function renderChartVisualization(chart, index, size) {
+  const width = Math.max(size.width, CHART_INITIAL_DIMENSION.width);
+  const height = Math.max(size.height, CHART_INITIAL_DIMENSION.height);
+  const pieOuterRadius = Math.max(72, Math.min(width, height) * 0.28);
+  const pieInnerRadius =
+    chart.renderType === "donut" ? Math.max(40, pieOuterRadius * 0.56) : 0;
+
+  if (chart.renderType === "bar") {
+    return (
+      <BarChart width={width} height={height} data={chart.chartData}>
+        <CartesianGrid strokeDasharray="3 3" stroke="#1F2937" />
+        <XAxis dataKey="name" stroke="#CBD5F5" />
+        <YAxis stroke="#CBD5F5" />
+        <Tooltip />
+        <Bar dataKey="value" fill={CHART_COLORS[0]} radius={[6, 6, 0, 0]} />
+      </BarChart>
+    );
+  }
+
+  if (chart.renderType === "horizontalBar") {
+    return (
+      <BarChart
+        width={width}
+        height={height}
+        data={chart.chartData}
+        layout="vertical"
+      >
+        <CartesianGrid strokeDasharray="3 3" stroke="#1F2937" />
+        <XAxis type="number" stroke="#CBD5F5" />
+        <YAxis dataKey="name" type="category" stroke="#CBD5F5" />
+        <Tooltip />
+        <Bar dataKey="value" fill={CHART_COLORS[1]} radius={[0, 6, 6, 0]} />
+      </BarChart>
+    );
+  }
+
+  if (chart.renderType === "line") {
+    return (
+      <LineChart width={width} height={height} data={chart.chartData}>
+        <CartesianGrid strokeDasharray="3 3" stroke="#1F2937" />
+        <XAxis dataKey="name" stroke="#CBD5F5" />
+        <YAxis stroke="#CBD5F5" />
+        <Tooltip />
+        <Line
+          type="monotone"
+          dataKey="value"
+          stroke={CHART_COLORS[2]}
+          strokeWidth={2}
+        />
+      </LineChart>
+    );
+  }
+
+  if (chart.renderType === "area") {
+    return (
+      <AreaChart width={width} height={height} data={chart.chartData}>
+        <defs>
+          <linearGradient id={`area-${index}`} x1="0" y1="0" x2="0" y2="1">
+            <stop offset="5%" stopColor={CHART_COLORS[3]} stopOpacity={0.7} />
+            <stop offset="95%" stopColor={CHART_COLORS[3]} stopOpacity={0.05} />
+          </linearGradient>
+        </defs>
+        <CartesianGrid strokeDasharray="3 3" stroke="#1F2937" />
+        <XAxis dataKey="name" stroke="#CBD5F5" />
+        <YAxis stroke="#CBD5F5" />
+        <Tooltip />
+        <Area
+          type="monotone"
+          dataKey="value"
+          stroke={CHART_COLORS[3]}
+          fill={`url(#area-${index})`}
+        />
+      </AreaChart>
+    );
+  }
+
+  if (chart.renderType === "scatter") {
+    return (
+      <ScatterChart width={width} height={height}>
+        <CartesianGrid strokeDasharray="3 3" stroke="#1F2937" />
+        <XAxis dataKey="x" type="number" stroke="#CBD5F5" />
+        <YAxis dataKey="y" type="number" stroke="#CBD5F5" />
+        <Tooltip cursor={{ strokeDasharray: "3 3" }} />
+        <Scatter data={chart.chartData} fill={CHART_COLORS[4]} />
+      </ScatterChart>
+    );
+  }
+
+  if (chart.renderType === "pie" || chart.renderType === "donut") {
+    return (
+      <PieChart width={width} height={height}>
+        <Tooltip />
+        <Pie
+          data={chart.chartData}
+          dataKey="value"
+          nameKey="name"
+          innerRadius={pieInnerRadius}
+          outerRadius={pieOuterRadius}
+          paddingAngle={2}
+          cx="50%"
+          cy="50%"
+        >
+          {chart.chartData.map((entry, idx) => (
+            <Cell
+              key={`slice-${idx}`}
+              fill={CHART_COLORS[idx % CHART_COLORS.length]}
+            />
+          ))}
+        </Pie>
+      </PieChart>
+    );
+  }
+
+  if (chart.renderType === "histogram") {
+    return (
+      <BarChart width={width} height={height} data={chart.chartData}>
+        <CartesianGrid strokeDasharray="3 3" stroke="#1F2937" />
+        <XAxis dataKey="name" stroke="#CBD5F5" />
+        <YAxis stroke="#CBD5F5" />
+        <Tooltip />
+        <Bar dataKey="value" fill={CHART_COLORS[5]} radius={[6, 6, 0, 0]} />
+      </BarChart>
+    );
+  }
+
+  if (chart.renderType === "multiLine") {
+    return (
+      <LineChart width={width} height={height} data={chart.chartData}>
+        <CartesianGrid strokeDasharray="3 3" stroke="#1F2937" />
+        <XAxis dataKey="name" stroke="#CBD5F5" />
+        <YAxis stroke="#CBD5F5" />
+        <Tooltip />
+        <Legend />
+        {chart.seriesKeys.map((key, seriesIndex) => (
+          <Line
+            key={key}
+            type="monotone"
+            dataKey={key}
+            stroke={CHART_COLORS[seriesIndex % CHART_COLORS.length]}
+            strokeWidth={2}
+          />
+        ))}
+      </LineChart>
+    );
+  }
+
+  if (chart.renderType === "stackedBar") {
+    return (
+      <BarChart width={width} height={height} data={chart.chartData}>
+        <CartesianGrid strokeDasharray="3 3" stroke="#1F2937" />
+        <XAxis dataKey="name" stroke="#CBD5F5" />
+        <YAxis stroke="#CBD5F5" />
+        <Tooltip />
+        <Legend />
+        {chart.seriesKeys.map((key, seriesIndex) => (
+          <Bar
+            key={key}
+            dataKey={key}
+            stackId="stack"
+            fill={CHART_COLORS[seriesIndex % CHART_COLORS.length]}
+          />
+        ))}
+      </BarChart>
+    );
+  }
+
+  return null;
+}
 
 export default function UploadFile() {
   const { user, loading: authLoading } = useAuth();
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState("");
   const [accessToken, setAccessToken] = useState(null);
+  const [relationships, setRelationships] = useState([]);
+  const [columns, setColumns] = useState([]);
+  const [rows, setRows] = useState([]);
 
   useEffect(() => {
     let isMounted = true;
@@ -39,12 +592,20 @@ export default function UploadFile() {
     return !authLoading && Boolean(user) && Boolean(accessToken);
   }, [authLoading, user, accessToken]);
 
+  const preparedCharts = useMemo(() => {
+    return buildPreparedCharts(relationships, rows, columns);
+  }, [relationships, rows, columns]);
+
   async function handleUpload(e) {
     e.preventDefault();
     setMessage("");
+    setRelationships([]);
+    setColumns([]);
+    setRows([]);
 
     if (!canUpload) {
       setMessage("Please sign in to upload files.");
+      toast.error("Please sign in to upload files.");
       return;
     }
 
@@ -55,9 +616,14 @@ export default function UploadFile() {
 
     if (!input?.files?.[0]) {
       setMessage("Please select a file");
+      toast.error("Please select a file.");
       setLoading(false);
       return;
     }
+
+    const loadingToast = toast.loading(
+      "Generating canvas from your dataset...",
+    );
 
     const formData = new FormData();
     formData.append("file", input.files[0]);
@@ -74,20 +640,55 @@ export default function UploadFile() {
       const data = await res.json();
 
       if (!res.ok) {
-        setMessage(data.error || "Upload failed");
+        const errorMessage = data.error || "Upload failed";
+        setMessage(errorMessage);
+        toast.error(errorMessage, { id: loadingToast });
       } else {
+        const nextRelationships = Array.isArray(data.relationships)
+          ? data.relationships
+          : [];
+        const nextColumns = Array.isArray(data.columns) ? data.columns : [];
+        const nextRows = Array.isArray(data.rows) ? data.rows : [];
+        const preview = buildPreparedCharts(
+          nextRelationships,
+          nextRows,
+          nextColumns,
+        );
+
         setMessage("Upload successful");
+        setRelationships(nextRelationships);
+        setColumns(nextColumns);
+        setRows(nextRows);
         form.reset();
+
+        if (preview.charts.length) {
+          toast.success(
+            `Canvas generated with ${preview.charts.length} chart${preview.charts.length > 1 ? "s" : ""}.`,
+            { id: loadingToast },
+          );
+          if (preview.skipped > 0) {
+            toast.warning(
+              `${preview.skipped} chart suggestion${preview.skipped > 1 ? "s were" : " was"} skipped due to empty or incompatible columns.`,
+            );
+          }
+        } else {
+          toast.error("No renderable charts were generated for this file.", {
+            id: loadingToast,
+          });
+        }
       }
     } catch (error) {
       setMessage("Something went wrong");
+      toast.error("Something went wrong while generating charts.", {
+        id: loadingToast,
+      });
     }
 
     setLoading(false);
   }
 
   return (
-    <div className="min-h-screen bg-[#0B1020] text-white flex items-center justify-center px-4 relative overflow-hidden">
+    <div className="min-h-screen bg-[#0B1020] text-white flex flex-col items-center px-4 py-12 relative overflow-hidden">
       <div className="pointer-events-none absolute inset-0 -z-10">
         <div className="absolute top-[-140px] left-[-120px] w-[360px] h-[360px] bg-[#22D3EE]/15 blur-[140px] rounded-full" />
         <div className="absolute top-[160px] right-[-120px] w-[320px] h-[320px] bg-[#F472B6]/15 blur-[140px] rounded-full" />
@@ -138,6 +739,76 @@ export default function UploadFile() {
           </form>
         </CardContent>
       </Card>
+
+      <div className="mt-10 w-full max-w-6xl">
+        {relationships.length ? (
+          <div className="space-y-6">
+            <div>
+              <h2 className="text-2xl font-semibold">Suggested charts</h2>
+              <p className="text-sm text-white/70">
+                Based on the uploaded dataset and AI analysis.
+              </p>
+              {preparedCharts.skipped > 0 ? (
+                <p className="mt-2 text-xs text-amber-200/90">
+                  {preparedCharts.skipped} suggestion
+                  {preparedCharts.skipped > 1 ? "s were" : " was"} skipped due
+                  to empty or incompatible data columns.
+                </p>
+              ) : null}
+            </div>
+
+            {preparedCharts.charts.length ? (
+              <div className="grid gap-6 lg:grid-cols-2">
+                {preparedCharts.charts.map((chart, index) => (
+                  <Card
+                    key={chart.key}
+                    className="min-w-0 border border-white/10 bg-white/5"
+                  >
+                    <CardHeader className="space-y-2">
+                      <CardTitle className="text-lg font-semibold">
+                        {chart.title}
+                      </CardTitle>
+                      <p className="text-sm text-white/70">
+                        {chart.description}
+                      </p>
+                    </CardHeader>
+                    <CardContent className="min-w-0 space-y-4">
+                      <Separator className="bg-white/10" />
+
+                      <ChartViewport>
+                        {(size) => renderChartVisualization(chart, index, size)}
+                      </ChartViewport>
+
+                      <div className="flex flex-wrap gap-2 text-xs text-white/60">
+                        <span>Type: {chart.chartType}</span>
+                        {chart.primary ? (
+                          <span>Primary: {chart.primary}</span>
+                        ) : null}
+                        {chart.secondary ? (
+                          <span>Secondary: {chart.secondary}</span>
+                        ) : null}
+                      </div>
+                    </CardContent>
+                  </Card>
+                ))}
+              </div>
+            ) : (
+              <Card className="border border-white/10 bg-white/5">
+                <CardContent className="py-8 text-center text-sm text-white/70">
+                  AI suggestions were received, but none had enough valid data
+                  to render. Try uploading a file with more non-empty values.
+                </CardContent>
+              </Card>
+            )}
+          </div>
+        ) : (
+          <Card className="border border-white/10 bg-white/5">
+            <CardContent className="py-8 text-center text-sm text-white/70">
+              Upload a dataset to see AI-generated chart recommendations here.
+            </CardContent>
+          </Card>
+        )}
+      </div>
     </div>
   );
 }

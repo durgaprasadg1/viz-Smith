@@ -3,6 +3,8 @@ export default function StatusBadge({ status }) {
     COMPLETE: "bg-emerald-500/15 text-emerald-400",
     PROCESSING: "bg-indigo-500/15 text-indigo-300",
     FAILED: "bg-rose-500/15 text-rose-300",
+    UPLOADED: "bg-amber-500/15 text-amber-300",
+    READY: "bg-emerald-500/15 text-emerald-400",
   };
 
   return (

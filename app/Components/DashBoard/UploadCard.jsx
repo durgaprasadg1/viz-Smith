@@ -1,4 +1,5 @@
 import { UploadCloud } from "lucide-react";
+import Link from "next/link";
 
 export default function UploadCard() {
   return (
@@ -12,9 +13,11 @@ export default function UploadCard() {
         Drop your CSV or JSON files here to start a high-precision AI analysis session.
       </p>
 
-      <button className="mt-8 w-full rounded-xl bg-gray-600 text-white py-3 font-medium hover:bg-black transition">
-        Browse Files
-      </button>
+      <Link href="/upload">
+        <button className="mt-8 w-full rounded-xl bg-gray-600 text-white py-3 font-medium hover:bg-black transition">
+          Browse Files
+        </button>
+      </Link>
     </div>
   );
 }
