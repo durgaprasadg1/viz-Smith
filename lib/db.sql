@@ -21,6 +21,16 @@ begin
 end;
 $$ language plpgsql;
 
+-- Automatically create a profile row when a new auth user is created
+create or replace function public.handle_new_user()
+returns trigger as $$
+begin
+  insert into public.profiles (id, full_name)
+  values (new.id, coalesce(new.raw_user_meta_data->>'full_name', null));
+  return new;
+end;
+$$ language plpgsql security definer;
+
 -- =========================================
 -- PROFILES TABLE
 -- =========================================
@@ -34,6 +44,13 @@ create table if not exists profiles (
 create trigger trg_profiles_updated_at
 before update on profiles
 for each row execute function set_updated_at();
+
+-- Trigger: when a new auth user is created, create matching profile
+drop trigger if exists on_auth_user_created on auth.users;
+
+create trigger on_auth_user_created
+after insert on auth.users
+for each row execute function public.handle_new_user();
 
 -- =========================================
 -- DATASETS TABLE
@@ -87,9 +104,19 @@ on conflict (id) do nothing;
 -- =========================================
 -- ENABLE RLS
 -- =========================================
-alter table profiles enable row level security;
-alter table datasets enable row level security;
-alter table storage.objects enable row level security;
+-- Tables created via Dashboard UI
+
+select schemaname, tablename, tableowner
+from pg_tables
+where schemaname = 'public';
+
+
+
+alter table public.profiles owner to postgres;
+alter table public.datasets owner to postgres;
+
+-- Functions created by another role
+alter function public.set_updated_at() owner to postgres;
 
 -- =========================================
 -- RLS: PROFILES
@@ -109,28 +136,25 @@ on profiles
 for update
 using (auth.uid() = id);
 
--- =========================================
--- RLS: DATASETS
--- =========================================
 create policy "Users can view own datasets"
 on datasets
 for select
-using (auth.uid() = user_id);
+using (auth.uid() = user_id::uuid);
 
 create policy "Users can insert own datasets"
 on datasets
 for insert
-with check (auth.uid() = user_id);
+with check (auth.uid() = user_id::uuid);
 
 create policy "Users can update own datasets"
 on datasets
 for update
-using (auth.uid() = user_id);
+using (auth.uid() = user_id::uuid);
 
 create policy "Users can delete own datasets"
 on datasets
 for delete
-using (auth.uid() = user_id);
+using (auth.uid() = user_id::uuid);
 
 -- =========================================
 -- RLS: STORAGE (user-uploads bucket)

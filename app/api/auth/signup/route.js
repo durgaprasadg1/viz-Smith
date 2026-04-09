@@ -23,22 +23,6 @@ async function signUpNewUser(email, password, redirectTo, fullName) {
   return data;
 }
 
-function createAdminClient() {
-  const { supabaseURL } = getEnvVar();
-  const serviceRoleKey = process.env.SERVICE_ROLE_KEY;
-
-  if (!serviceRoleKey) {
-    throw new Error("Missing service role key");
-  }
-
-  return createClient(supabaseURL, serviceRoleKey, {
-    auth: {
-      persistSession: false,
-      autoRefreshToken: false,
-    },
-  });
-}
-
 export async function POST(request) {
   try {
     const { email, password, name } = await request.json();
@@ -53,21 +37,6 @@ export async function POST(request) {
     const redirectTo = new URL("/dashboard", request.url).toString();
 
     const data = await signUpNewUser(email, password, redirectTo, name);
-
-    if (data?.user?.id) {
-      const admin = createAdminClient();
-      const { error: profileError } = await admin.from("profiles").upsert({
-        id: data.user.id,
-        full_name: name ?? null,
-      });
-
-      if (profileError) {
-        return NextResponse.json(
-          { error: profileError.message ?? "Failed to create profile" },
-          { status: 500 },
-        );
-      }
-    }
 
     return NextResponse.json(
       { data, requiresEmailConfirmation: !data?.session },
