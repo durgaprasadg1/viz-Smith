@@ -17,6 +17,7 @@
     "@supabase/supabase-js": "^2.102.1",
     "@tanstack/react-form": "^1.28.6",
     "@tanstack/react-table": "^8.21.3",
+    "canvas": "^3.2.3",
     "chart.js": "^4.5.1",
     "chartjs-node-canvas": "^5.0.0",
     "class-variance-authority": "^0.7.1",
