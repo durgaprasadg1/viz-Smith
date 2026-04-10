@@ -1,14 +1,16 @@
-import { NextResponse } from "next/server";
+﻿import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 
+import { getAuthorizedUserFromRequest } from "@/lib/api-route-auth";
 import { buildPreparedCharts } from "@/lib/chart-preparation";
 import { analyzeDatasetBuffer } from "@/lib/dataset-analysis";
 import { buildExportFile } from "@/lib/exporters";
 import {
   CACHE_TTL_SECONDS,
   getDatasetCacheKey,
-  getOrSetCachedJson,
+  getJsonCache,
   invalidateUserDatasetCaches,
+  setJsonCache,
 } from "@/lib/redis-cache";
 import { getEnvVar } from "@/lib/supabase";
 
@@ -46,27 +48,6 @@ function extractObjectPathFromUrl(rawValue) {
   } catch {
     return null;
   }
-}
-
-function getAccessTokenFromRequest(req) {
-  const authHeader = req.headers.get("authorization");
-  if (!authHeader?.startsWith("Bearer ")) return null;
-  return authHeader.slice("Bearer ".length).trim() || null;
-}
-
-function createAuthorizedSupabaseClient(token) {
-  const { supabaseURL, supabaseAnonKey } = getEnvVar();
-  return createClient(supabaseURL, supabaseAnonKey, {
-    global: {
-      headers: {
-        Authorization: `Bearer ${token}`,
-      },
-    },
-    auth: {
-      persistSession: false,
-      autoRefreshToken: false,
-    },
-  });
 }
 
 function getStorageDownloadCandidates(dataset) {
@@ -154,10 +135,16 @@ async function downloadStoredDataset(storageClient, dataset) {
 
 export async function POST(req) {
   try {
-    const token = getAccessTokenFromRequest(req);
+    const { errorResponse, supabase, user } = await getAuthorizedUserFromRequest(
+      req,
+      {
+        missingTokenMessage: "Unauthorized",
+        invalidTokenMessage: "Unauthorized",
+      },
+    );
 
-    if (!token) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    if (errorResponse) {
+      return errorResponse;
     }
 
     const { datasetId, format } = await req.json();
@@ -178,50 +165,49 @@ export async function POST(req) {
       );
     }
 
-    const supabase = createAuthorizedSupabaseClient(token);
+    const refreshRequested = req.nextUrl.searchParams.get("refresh") === "1";
+    const datasetCacheKey = getDatasetCacheKey(user.id, datasetId);
 
-    const {
-      data: { user },
-      error: userError,
-    } = await supabase.auth.getUser(token);
+    let dataset = null;
+    let datasetCacheStatus = "MISS";
 
-    if (userError || !user) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    if (!refreshRequested) {
+      dataset = await getJsonCache(datasetCacheKey);
+      if (dataset !== null) {
+        datasetCacheStatus = "HIT";
+      }
     }
 
-    const datasetCacheKey = getDatasetCacheKey(user.id, datasetId);
-    const { value: dataset, cacheStatus: datasetCacheStatus } =
-      await getOrSetCachedJson({
-        key: datasetCacheKey,
-        ttlSeconds: CACHE_TTL_SECONDS.dataset,
-        loader: async () => {
-          const { data, error } = await supabase
-            .from("datasets")
-            .select(
-              "id, user_id, file_name, file_size, file_type, storage_bucket, storage_path, metadata, created_at, uploaded_at",
-            )
-            .eq("id", datasetId)
-            .eq("user_id", user.id)
-            .single();
+    if (dataset === null) {
+      const { data, error } = await supabase
+        .from("datasets")
+        .select(
+          "id, user_id, file_name, file_size, file_type, storage_bucket, storage_path, metadata, created_at, uploaded_at",
+        )
+        .eq("id", datasetId)
+        .eq("user_id", user.id)
+        .single();
 
-          if (error) {
-            const normalizedMessage = String(error.message || "").toLowerCase();
-            const isNotFoundError =
-              error.code === "PGRST116" ||
-              normalizedMessage.includes("no rows");
+      if (error) {
+        const normalizedMessage = String(error.message || "").toLowerCase();
+        const isNotFoundError =
+          error.code === "PGRST116" || normalizedMessage.includes("no rows");
 
-            if (isNotFoundError) {
-              return null;
-            }
+        if (isNotFoundError) {
+          dataset = null;
+        } else {
+          throw new Error(error.message || "Unable to fetch dataset metadata");
+        }
+      } else {
+        dataset = data || null;
+      }
 
-            throw new Error(
-              error.message || "Unable to fetch dataset metadata",
-            );
-          }
+      if (dataset !== null) {
+        await setJsonCache(datasetCacheKey, dataset, CACHE_TTL_SECONDS.dataset);
+      }
 
-          return data || null;
-        },
-      });
+      datasetCacheStatus = refreshRequested ? "BYPASS" : "MISS";
+    }
 
     if (!dataset) {
       await invalidateUserDatasetCaches({
@@ -307,7 +293,6 @@ export async function POST(req) {
       .replace(/\.[^/.]+$/, "")
       .replace(/[^a-zA-Z0-9._-]/g, "_");
 
-    // Export log insert is best-effort so export response is not blocked
     await supabase
       .from("dataset_exports")
       .insert({
