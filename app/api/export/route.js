@@ -4,6 +4,12 @@ import { createClient } from "@supabase/supabase-js";
 import { buildPreparedCharts } from "@/lib/chart-preparation";
 import { analyzeDatasetBuffer } from "@/lib/dataset-analysis";
 import { buildExportFile } from "@/lib/exporters";
+import {
+  CACHE_TTL_SECONDS,
+  getDatasetCacheKey,
+  getOrSetCachedJson,
+  invalidateUserDatasetCaches,
+} from "@/lib/redis-cache";
 import { getEnvVar } from "@/lib/supabase";
 
 const ALLOWED_EXPORT_FORMATS = new Set(["pdf", "ppt"]);
@@ -183,16 +189,46 @@ export async function POST(req) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    const { data: dataset, error: datasetError } = await supabase
-      .from("datasets")
-      .select(
-        "id, user_id, file_name, file_size, file_type, storage_bucket, storage_path, metadata, created_at, uploaded_at",
-      )
-      .eq("id", datasetId)
-      .eq("user_id", user.id)
-      .single();
+    const datasetCacheKey = getDatasetCacheKey(user.id, datasetId);
+    const { value: dataset, cacheStatus: datasetCacheStatus } =
+      await getOrSetCachedJson({
+        key: datasetCacheKey,
+        ttlSeconds: CACHE_TTL_SECONDS.dataset,
+        loader: async () => {
+          const { data, error } = await supabase
+            .from("datasets")
+            .select(
+              "id, user_id, file_name, file_size, file_type, storage_bucket, storage_path, metadata, created_at, uploaded_at",
+            )
+            .eq("id", datasetId)
+            .eq("user_id", user.id)
+            .single();
 
-    if (datasetError || !dataset) {
+          if (error) {
+            const normalizedMessage = String(error.message || "").toLowerCase();
+            const isNotFoundError =
+              error.code === "PGRST116" ||
+              normalizedMessage.includes("no rows");
+
+            if (isNotFoundError) {
+              return null;
+            }
+
+            throw new Error(
+              error.message || "Unable to fetch dataset metadata",
+            );
+          }
+
+          return data || null;
+        },
+      });
+
+    if (!dataset) {
+      await invalidateUserDatasetCaches({
+        userId: user.id,
+        datasetIds: [datasetId],
+      }).catch(() => undefined);
+
       return NextResponse.json({ error: "Dataset not found" }, { status: 404 });
     }
 
@@ -292,6 +328,7 @@ export async function POST(req) {
         "Content-Type": exportFile.contentType,
         "Content-Disposition": `attachment; filename="${safeBaseName}.${exportFile.extension}"`,
         "Cache-Control": "no-store",
+        "X-Redis-Dataset": datasetCacheStatus,
       },
     });
   } catch (error) {

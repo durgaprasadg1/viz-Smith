@@ -62,12 +62,36 @@ export default function DashboardPage() {
   const { user, loading: authLoading } = useAuth();
   const [datasets, setDatasets] = useState([]);
   const [loadingDatasets, setLoadingDatasets] = useState(true);
+  const [accessToken, setAccessToken] = useState(null);
   const [snapshotTime] = useState(() => Date.now());
+
+  useEffect(() => {
+    let isMounted = true;
+
+    supabase.auth.getSession().then(({ data }) => {
+      if (!isMounted) return;
+      setAccessToken(data.session?.access_token ?? null);
+    });
+
+    const { data: listener } = supabase.auth.onAuthStateChange(
+      (_event, session) => {
+        setAccessToken(session?.access_token ?? null);
+      },
+    );
+
+    return () => {
+      isMounted = false;
+      listener.subscription.unsubscribe();
+    };
+  }, []);
 
   useEffect(() => {
     let active = true;
 
-    async function fetchDatasets() {
+    async function fetchDatasets({
+      forceRefresh = false,
+      showLoading = false,
+    } = {}) {
       if (!user?.id) {
         if (!active) return;
         setDatasets([]);
@@ -75,26 +99,41 @@ export default function DashboardPage() {
         return;
       }
 
-      const { data, error } = await supabase
-        .from("datasets")
-        .select("id, file_name, file_size, status, uploaded_at, created_at")
-        .eq("user_id", user.id)
-        .order("uploaded_at", { ascending: false });
+      if (!accessToken) {
+        return;
+      }
+
+      if (showLoading) {
+        setLoadingDatasets(true);
+      }
+
+      const query = forceRefresh ? "?refresh=1" : "";
+      const response = await fetch(`/api/user/dashboard${query}`, {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+        },
+        cache: "no-store",
+      });
 
       if (!active) return;
 
-      if (error) {
+      if (!response.ok) {
         setDatasets([]);
         setLoadingDatasets(false);
         return;
       }
 
-      setDatasets(Array.isArray(data) ? data : []);
+      const payload = await response.json().catch(() => ({}));
+      const nextDatasets = Array.isArray(payload?.datasets)
+        ? payload.datasets
+        : [];
+
+      setDatasets(nextDatasets);
       setLoadingDatasets(false);
     }
 
-    if (!authLoading) {
-      fetchDatasets();
+    if (!authLoading && accessToken) {
+      fetchDatasets({ showLoading: true });
     }
 
     if (!user?.id) {
@@ -114,7 +153,7 @@ export default function DashboardPage() {
           filter: `user_id=eq.${user.id}`,
         },
         () => {
-          fetchDatasets();
+          fetchDatasets({ forceRefresh: true });
         },
       )
       .subscribe();
@@ -123,21 +162,24 @@ export default function DashboardPage() {
       active = false;
       supabase.removeChannel(channel);
     };
-  }, [authLoading, user?.id]);
+  }, [accessToken, authLoading, user?.id]);
 
   const totalUploads = datasets.length;
   const completedDatasets = datasets.filter(
     (dataset) => dataset.status === "ready",
   ).length;
   const processingDatasets = datasets.filter(
-    (dataset) => dataset.status === "processing" || dataset.status === "uploaded",
+    (dataset) =>
+      dataset.status === "processing" || dataset.status === "uploaded",
   );
   const failedDatasets = datasets.filter(
     (dataset) => dataset.status === "failed",
   ).length;
   const recentWindowStart = snapshotTime - 7 * 24 * 60 * 60 * 1000;
   const uploadsLastWeek = datasets.filter((dataset) => {
-    const uploadedAt = Date.parse(dataset.uploaded_at || dataset.created_at || "");
+    const uploadedAt = Date.parse(
+      dataset.uploaded_at || dataset.created_at || "",
+    );
     return !Number.isNaN(uploadedAt) && uploadedAt >= recentWindowStart;
   }).length;
 
@@ -146,11 +188,15 @@ export default function DashboardPage() {
     name: dataset.file_name,
     size: formatFileSize(dataset.file_size),
     status: toDashboardStatus(dataset.status),
-    modified: dataset.uploaded_at || dataset.created_at
-      ? formatDistanceToNow(new Date(dataset.uploaded_at || dataset.created_at), {
-          addSuffix: true,
-        })
-      : "Unknown",
+    modified:
+      dataset.uploaded_at || dataset.created_at
+        ? formatDistanceToNow(
+            new Date(dataset.uploaded_at || dataset.created_at),
+            {
+              addSuffix: true,
+            },
+          )
+        : "Unknown",
   }));
 
   return (
@@ -172,7 +218,11 @@ export default function DashboardPage() {
           />
           <StatCard
             title="Active Jobs"
-            value={loadingDatasets ? "..." : processingDatasets.length.toLocaleString()}
+            value={
+              loadingDatasets
+                ? "..."
+                : processingDatasets.length.toLocaleString()
+            }
             extra={loadingDatasets ? "" : "Live queue"}
           />
         </div>
