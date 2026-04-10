@@ -10,7 +10,7 @@ export default function UploadCard() {
 
       <h3 className="mt-6 text-3xl font-semibold">Upload New Dataset</h3>
       <p className="mt-3 text-white/60 leading-relaxed">
-        Drop your CSV or JSON files here to start a high-precision AI analysis session.
+        Drop your CSV or XLSX files here to start a high-precision AI analysis session.
       </p>
 
       <Link href="/upload">

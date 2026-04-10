@@ -25,7 +25,8 @@ async function signUpNewUser(email, password, redirectTo, fullName) {
 
 function createAdminClient() {
   const { supabaseURL } = getEnvVar();
-  const serviceRoleKey = process.env.SERVICE_ROLE_KEY;
+  const serviceRoleKey =
+    process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SERVICE_ROLE_KEY;
 
   if (!serviceRoleKey) {
     throw new Error("Missing service role key");

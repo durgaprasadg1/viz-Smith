@@ -145,6 +145,7 @@ export default function HistoryPage() {
       const { data, error: queryError } = await supabase
         .from("datasets")
         .select("id, file_name, status, created_at, uploaded_at")
+        .eq("user_id", user.id)
         .order("uploaded_at", { ascending: false });
 
       if (!active) return;

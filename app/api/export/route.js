@@ -8,8 +8,31 @@ import { getEnvVar } from "@/lib/supabase";
 
 const ALLOWED_EXPORT_FORMATS = new Set(["pdf", "ppt", "excel"]);
 
+export const runtime = "nodejs";
+
 function unique(values) {
   return [...new Set(values.filter(Boolean))];
+}
+
+function getAccessTokenFromRequest(req) {
+  const authHeader = req.headers.get("authorization");
+  if (!authHeader?.startsWith("Bearer ")) return null;
+  return authHeader.slice("Bearer ".length).trim() || null;
+}
+
+function createAuthorizedSupabaseClient(token) {
+  const { supabaseURL, supabaseAnonKey } = getEnvVar();
+  return createClient(supabaseURL, supabaseAnonKey, {
+    global: {
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    },
+    auth: {
+      persistSession: false,
+      autoRefreshToken: false,
+    },
+  });
 }
 
 function getStorageDownloadCandidates(dataset) {
@@ -56,10 +79,7 @@ async function downloadStoredDataset(storageClient, dataset) {
 
 export async function POST(req) {
   try {
-    const authHeader = req.headers.get("authorization");
-    const token = authHeader?.startsWith("Bearer ")
-      ? authHeader.slice("Bearer ".length)
-      : null;
+    const token = getAccessTokenFromRequest(req);
 
     if (!token) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -83,18 +103,7 @@ export async function POST(req) {
       );
     }
 
-    const { supabaseURL, supabaseAnonKey } = getEnvVar();
-    const supabase = createClient(supabaseURL, supabaseAnonKey, {
-      global: {
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
-      },
-      auth: {
-        persistSession: false,
-        autoRefreshToken: false,
-      },
-    });
+    const supabase = createAuthorizedSupabaseClient(token);
 
     const {
       data: { user },
@@ -111,9 +120,10 @@ export async function POST(req) {
         "id, user_id, file_name, file_size, file_type, storage_bucket, storage_path, metadata, created_at, uploaded_at",
       )
       .eq("id", datasetId)
+      .eq("user_id", user.id)
       .single();
 
-    if (datasetError || !dataset || dataset.user_id !== user.id) {
+    if (datasetError || !dataset) {
       return NextResponse.json({ error: "Dataset not found" }, { status: 404 });
     }
 
@@ -127,6 +137,7 @@ export async function POST(req) {
       );
     }
 
+    const { supabaseURL } = getEnvVar();
     const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
     const storageClient = serviceRoleKey
       ? createClient(supabaseURL, serviceRoleKey, {
@@ -163,13 +174,20 @@ export async function POST(req) {
       fileName: dataset.file_name,
       fileSize: dataset.file_size,
       existingRelationships: dataset.metadata?.relationships,
+      skipAi: true,
     });
 
-    const preparedCharts = buildPreparedCharts(
-      analysis.relationships,
-      analysis.previewRows,
-      analysis.columns,
-    );
+    const persistedProcessedCharts = dataset?.metadata?.processedCharts;
+    const preparedCharts = Array.isArray(persistedProcessedCharts?.charts)
+      ? {
+          charts: persistedProcessedCharts.charts,
+          skipped: Number(persistedProcessedCharts.skipped || 0),
+        }
+      : buildPreparedCharts(
+          analysis.relationships,
+          analysis.previewRows,
+          analysis.columns,
+        );
 
     const exportFile = await buildExportFile({
       dataset,
@@ -179,9 +197,24 @@ export async function POST(req) {
       charts: preparedCharts.charts,
     });
 
-    const safeBaseName = dataset.file_name
+    const safeBaseName = String(dataset.file_name || "dataset")
       .replace(/\.[^/.]+$/, "")
       .replace(/[^a-zA-Z0-9._-]/g, "_");
+
+    // Export log insert is best-effort so export response is not blocked
+    await supabase
+      .from("dataset_exports")
+      .insert({
+        dataset_id: dataset.id,
+        user_id: user.id,
+        format: normalizedFormat,
+        file_name: `${safeBaseName}.${exportFile.extension}`,
+        file_size: exportFile.buffer.length,
+        storage_bucket: null,
+        storage_path: null,
+      })
+      .then(() => undefined)
+      .catch(() => undefined);
 
     return new NextResponse(exportFile.buffer, {
       status: 200,

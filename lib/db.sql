@@ -2,6 +2,7 @@
 -- CLEAN RESET (WARNING: DROPS OLD TABLES)
 -- =========================================
 drop table if exists datasets cascade;
+drop table if exists dataset_exports cascade;
 drop table if exists profiles cascade;
 drop function if exists set_updated_at() cascade;
 
@@ -103,6 +104,24 @@ create trigger trg_datasets_updated_at
 before update on datasets
 for each row execute function set_updated_at();
 
+-- =========================================
+-- DATASET EXPORTS TABLE
+-- =========================================
+create table if not exists dataset_exports (
+  id uuid primary key default gen_random_uuid(),
+  dataset_id uuid not null references datasets(id) on delete cascade,
+  user_id uuid not null references auth.users(id) on delete cascade,
+  format text not null check (format in ('pdf', 'ppt', 'excel')),
+  file_name text not null,
+  file_size bigint,
+  storage_bucket text,
+  storage_path text,
+  created_at timestamptz not null default now()
+);
+
+create index idx_dataset_exports_dataset_id on dataset_exports(dataset_id);
+create index idx_dataset_exports_user_id on dataset_exports(user_id);
+
 -- Ensure the datasets.user_id foreign key points at auth.users,
 -- even if an older version of this script created it against profiles.
 alter table if exists datasets
@@ -122,6 +141,7 @@ on conflict (id) do nothing;
 -- =========================================
 alter table profiles enable row level security;
 alter table datasets enable row level security;
+alter table dataset_exports enable row level security;
 
 -- =========================================
 -- RLS: PROFILES
@@ -161,5 +181,23 @@ using (auth.uid() = user_id::uuid);
 
 create policy "Users can delete own datasets"
 on datasets
+for delete
+using (auth.uid() = user_id::uuid);
+
+-- =========================================
+-- RLS: DATASET_EXPORTS
+-- =========================================
+create policy "Users can view own dataset exports"
+on dataset_exports
+for select
+using (auth.uid() = user_id::uuid);
+
+create policy "Users can insert own dataset exports"
+on dataset_exports
+for insert
+with check (auth.uid() = user_id::uuid);
+
+create policy "Users can delete own dataset exports"
+on dataset_exports
 for delete
 using (auth.uid() = user_id::uuid);
