@@ -1,14 +1,13 @@
-import { NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
+﻿import { NextResponse } from "next/server";
 
+import { getAuthorizedUserFromRequest } from "@/lib/api-route-auth";
+import { buildPreparedCharts } from "@/lib/chart-preparation";
 import {
   ALLOWED_TYPES,
   MAX_FILE_SIZE,
   analyzeDatasetBuffer,
 } from "@/lib/dataset-analysis";
-import { buildPreparedCharts } from "@/lib/chart-preparation";
 import { invalidateUserDatasetCaches } from "@/lib/redis-cache";
-import { getEnvVar } from "@/lib/supabase";
 
 const SUPPORTED_EXTENSIONS = [".csv", ".xlsx"];
 const STORAGE_BUCKET = "user-uploads";
@@ -49,12 +48,6 @@ function hasSupportedMimeType(fileType) {
   return GENERIC_BINARY_TYPES.has(fileType);
 }
 
-function getAccessTokenFromRequest(req) {
-  const authHeader = req.headers.get("authorization");
-  if (!authHeader?.startsWith("Bearer ")) return null;
-  return authHeader.slice("Bearer ".length).trim() || null;
-}
-
 function buildStoragePath(userId, fileName) {
   const safeFileName = sanitizeFileName(fileName);
   const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
@@ -62,40 +55,18 @@ function buildStoragePath(userId, fileName) {
   return `${userId}/${timestamp}-${random}-${safeFileName}`;
 }
 
-function createAuthorizedSupabaseClient(token) {
-  const { supabaseURL, supabaseAnonKey } = getEnvVar();
-  return createClient(supabaseURL, supabaseAnonKey, {
-    global: {
-      headers: {
-        Authorization: `Bearer ${token}`,
-      },
-    },
-    auth: {
-      persistSession: false,
-      autoRefreshToken: false,
-    },
-  });
-}
-
 export async function POST(req) {
   try {
-    const token = getAccessTokenFromRequest(req);
+    const { errorResponse, supabase, user } = await getAuthorizedUserFromRequest(
+      req,
+      {
+        missingTokenMessage: "Please sign in before uploading a dataset.",
+        invalidTokenMessage: "Unauthorized",
+      },
+    );
 
-    if (!token) {
-      return NextResponse.json(
-        { error: "Please sign in before uploading a dataset." },
-        { status: 401 },
-      );
-    }
-
-    const supabase = createAuthorizedSupabaseClient(token);
-    const {
-      data: { user },
-      error: userError,
-    } = await supabase.auth.getUser(token);
-
-    if (userError || !user) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    if (errorResponse) {
+      return errorResponse;
     }
 
     const formData = await req.formData();
