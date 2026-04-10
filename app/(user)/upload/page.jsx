@@ -800,7 +800,9 @@ export default function UploadFile() {
             ? {
                 id: data.dataset.id,
                 fileName:
-                  data?.dataset?.file_name || data?.dataset?.fileName || file.name,
+                  data?.dataset?.file_name ||
+                  data?.dataset?.fileName ||
+                  file.name,
               }
             : null,
         );
@@ -964,7 +966,9 @@ export default function UploadFile() {
             <Button
               type="button"
               variant="outline"
-              disabled={!canExportReports || loading || Boolean(exportingFormat)}
+              disabled={
+                !canExportReports || loading || Boolean(exportingFormat)
+              }
               className="w-full border-white/20 bg-white/5 text-white hover:bg-white/10"
               onClick={() => setExportDialogOpen(true)}
             >
