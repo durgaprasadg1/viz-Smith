@@ -5,7 +5,6 @@ import { format, formatDistanceToNow } from "date-fns";
 import {
   CalendarDays,
   Download,
-  FileSpreadsheet,
   FileText,
   History,
   Presentation,
@@ -70,7 +69,6 @@ function parseFilenameFromDisposition(disposition) {
 
 function extensionFromFormat(format) {
   if (format === "ppt") return "pptx";
-  if (format === "excel") return "xlsx";
   return "pdf";
 }
 
@@ -86,12 +84,6 @@ const EXPORT_OPTIONS = [
     title: "Export as PPT",
     subtitle: "Slides with full dataset table and chart visualizations",
     icon: Presentation,
-  },
-  {
-    format: "excel",
-    title: "Export as Excel",
-    subtitle: "Workbook with all rows, columns, and chart snapshots",
-    icon: FileSpreadsheet,
   },
 ];
 
@@ -145,6 +137,7 @@ export default function HistoryPage() {
       const { data, error: queryError } = await supabase
         .from("datasets")
         .select("id, file_name, status, created_at, uploaded_at")
+        .eq("user_id", user.id)
         .order("uploaded_at", { ascending: false });
 
       if (!active) return;
@@ -340,7 +333,7 @@ export default function HistoryPage() {
                 </h1>
                 <p className="mt-2 max-w-2xl text-sm text-white/65">
                   Every uploaded dataset lives here with instant export options
-                  for PDF, PPT, and Excel output.
+                  for PDF and PPT output.
                 </p>
               </div>
             </div>

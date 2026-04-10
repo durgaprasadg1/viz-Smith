@@ -5,6 +5,14 @@ import { createSupabaseClient } from "@/lib/supabase";
 import useAuth from "@/hooks/useAuth";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Separator } from "@/components/ui/separator";
 import { toast } from "sonner";
@@ -28,6 +36,7 @@ import {
 } from "recharts";
 
 const supabase = createSupabaseClient();
+const UPLOAD_REQUEST_TIMEOUT_MS = 30000;
 
 const CHART_COLORS = [
   "#22D3EE",
@@ -36,6 +45,19 @@ const CHART_COLORS = [
   "#34D399",
   "#F59E0B",
   "#60A5FA",
+];
+
+const EXPORT_OPTIONS = [
+  {
+    format: "pdf",
+    title: "Export as PDF",
+    subtitle: "Report style document with complete table and all charts",
+  },
+  {
+    format: "ppt",
+    title: "Export as PPT",
+    subtitle: "Slides with full dataset table and chart visualizations",
+  },
 ];
 
 const CHART_INITIAL_DIMENSION = {
@@ -97,6 +119,29 @@ function normalizeChartType(value) {
     .toLowerCase()
     .replace(/[^a-z]/g, "");
   return CHART_TYPE_ALIAS[normalized] || "bar";
+}
+
+function parseFilenameFromDisposition(disposition) {
+  if (!disposition) return null;
+
+  const utfMatch = disposition.match(/filename\*=UTF-8''([^;]+)/i);
+  if (utfMatch?.[1]) {
+    try {
+      return decodeURIComponent(utfMatch[1]);
+    } catch {
+      return utfMatch[1];
+    }
+  }
+
+  const regularMatch = disposition.match(/filename="?([^";]+)"?/i);
+  if (regularMatch?.[1]) return regularMatch[1];
+
+  return null;
+}
+
+function extensionFromFormat(format) {
+  if (format === "ppt") return "pptx";
+  return "pdf";
 }
 
 function toNumber(value) {
@@ -559,6 +604,48 @@ function renderChartVisualization(chart, index, size) {
   return null;
 }
 
+function RelationshipSummaryCard({ relationship, index }) {
+  const columns = Array.isArray(relationship?.columns)
+    ? relationship.columns.map(normalizeLabel).filter(Boolean)
+    : [];
+  const chartType = normalizeChartType(relationship?.chartType);
+  const description = normalizeLabel(
+    relationship?.description ||
+      relationship?.rationale ||
+      "No description provided.",
+  );
+
+  return (
+    <Card className="border border-cyan-300/20 bg-slate-950/50">
+      <CardHeader className="space-y-1 pb-3">
+        <CardTitle className="text-base font-semibold text-cyan-100">
+          Recommendation {index + 1}
+        </CardTitle>
+        <p className="text-xs uppercase tracking-wide text-cyan-200/80">
+          {chartType}
+        </p>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <div className="flex flex-wrap gap-2">
+          {columns.length ? (
+            columns.map((column, colIndex) => (
+              <span
+                key={`${column}-${colIndex}`}
+                className="rounded-full border border-white/15 bg-white/5 px-2.5 py-1 text-xs text-white/80"
+              >
+                {column}
+              </span>
+            ))
+          ) : (
+            <span className="text-xs text-white/50">No columns detected</span>
+          )}
+        </div>
+        <p className="text-sm leading-relaxed text-white/70">{description}</p>
+      </CardContent>
+    </Card>
+  );
+}
+
 export default function UploadFile() {
   const { user, loading: authLoading } = useAuth();
   const [loading, setLoading] = useState(false);
@@ -567,6 +654,18 @@ export default function UploadFile() {
   const [relationships, setRelationships] = useState([]);
   const [columns, setColumns] = useState([]);
   const [rows, setRows] = useState([]);
+  const [analysisSummary, setAnalysisSummary] = useState({
+    rowCount: 0,
+    columnCount: 0,
+    sheetName: null,
+  });
+  const [preparedCharts, setPreparedCharts] = useState({
+    charts: [],
+    skipped: 0,
+  });
+  const [latestDataset, setLatestDataset] = useState(null);
+  const [exportDialogOpen, setExportDialogOpen] = useState(false);
+  const [exportingFormat, setExportingFormat] = useState("");
 
   useEffect(() => {
     let isMounted = true;
@@ -592,9 +691,13 @@ export default function UploadFile() {
     return !authLoading && Boolean(user) && Boolean(accessToken);
   }, [authLoading, user, accessToken]);
 
-  const preparedCharts = useMemo(() => {
-    return buildPreparedCharts(relationships, rows, columns);
-  }, [relationships, rows, columns]);
+  const canExportReports = useMemo(() => {
+    return (
+      Boolean(accessToken) &&
+      Boolean(latestDataset?.id) &&
+      preparedCharts.charts.length > 0
+    );
+  }, [accessToken, latestDataset, preparedCharts]);
 
   async function handleUpload(e) {
     e.preventDefault();
@@ -602,6 +705,11 @@ export default function UploadFile() {
     setRelationships([]);
     setColumns([]);
     setRows([]);
+    setAnalysisSummary({ rowCount: 0, columnCount: 0, sheetName: null });
+    setPreparedCharts({ charts: [], skipped: 0 });
+    setLatestDataset(null);
+    setExportDialogOpen(false);
+    setExportingFormat("");
 
     if (!canUpload) {
       setMessage("Please sign in to upload files.");
@@ -627,17 +735,23 @@ export default function UploadFile() {
 
     const formData = new FormData();
     formData.append("file", input.files[0]);
+    const controller = new AbortController();
+    const timeout = setTimeout(() => {
+      controller.abort();
+    }, UPLOAD_REQUEST_TIMEOUT_MS);
 
     try {
       const res = await fetch("/api/upload", {
         method: "POST",
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-        },
+        headers: accessToken
+          ? {
+              Authorization: `Bearer ${accessToken}`,
+            }
+          : {},
         body: formData,
+        signal: controller.signal,
       });
-
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
 
       if (!res.ok) {
         const errorMessage = data.error || "Upload failed";
@@ -649,26 +763,69 @@ export default function UploadFile() {
           : [];
         const nextColumns = Array.isArray(data.columns) ? data.columns : [];
         const nextRows = Array.isArray(data.rows) ? data.rows : [];
-        const preview = buildPreparedCharts(
+        const fallbackPreview = buildPreparedCharts(
           nextRelationships,
           nextRows,
           nextColumns,
         );
+        const hasServerPreparedCharts = Array.isArray(
+          data?.processedCharts?.charts,
+        );
+        const serverPreparedCharts = {
+          charts: hasServerPreparedCharts ? data.processedCharts.charts : [],
+          skipped: Number.isFinite(Number(data?.processedCharts?.skipped))
+            ? Number(data.processedCharts.skipped)
+            : 0,
+        };
 
         setMessage("Upload successful");
         setRelationships(nextRelationships);
         setColumns(nextColumns);
         setRows(nextRows);
+        setAnalysisSummary({
+          rowCount: Number.isFinite(Number(data?.rowCount))
+            ? Number(data.rowCount)
+            : nextRows.length,
+          columnCount: Number.isFinite(Number(data?.columnCount))
+            ? Number(data.columnCount)
+            : nextColumns.length,
+          sheetName:
+            typeof data?.sheetName === "string" && data.sheetName.trim()
+              ? data.sheetName.trim()
+              : null,
+        });
+        setPreparedCharts(serverPreparedCharts);
+        setLatestDataset(
+          data?.dataset?.id
+            ? {
+                id: data.dataset.id,
+                fileName:
+                  data?.dataset?.file_name || data?.dataset?.fileName || file.name,
+              }
+            : null,
+        );
         form.reset();
 
-        if (preview.charts.length) {
+        if (!hasServerPreparedCharts && fallbackPreview.charts.length) {
+          toast.warning(
+            "Server response missed prepared charts, so rendering was skipped to avoid backend/frontend mismatch.",
+          );
+        }
+
+        if (data?.ai?.error) {
+          toast.warning(
+            "AI analysis did not complete in time, so fallback relationships were used.",
+          );
+        }
+
+        if (serverPreparedCharts.charts.length) {
           toast.success(
-            `Canvas generated with ${preview.charts.length} chart${preview.charts.length > 1 ? "s" : ""}.`,
+            `Canvas generated with ${serverPreparedCharts.charts.length} chart${serverPreparedCharts.charts.length > 1 ? "s" : ""}.`,
             { id: loadingToast },
           );
-          if (preview.skipped > 0) {
+          if (serverPreparedCharts.skipped > 0) {
             toast.warning(
-              `${preview.skipped} chart suggestion${preview.skipped > 1 ? "s were" : " was"} skipped due to empty or incompatible columns.`,
+              `${serverPreparedCharts.skipped} chart suggestion${serverPreparedCharts.skipped > 1 ? "s were" : " was"} skipped due to empty or incompatible columns.`,
             );
           }
         } else {
@@ -676,15 +833,92 @@ export default function UploadFile() {
             id: loadingToast,
           });
         }
+
+        if (data?.persistence?.warning) {
+          toast.warning(
+            `Charts generated, but dataset save failed: ${data.persistence.warning}`,
+          );
+        }
       }
     } catch (error) {
-      setMessage("Something went wrong");
+      const errorMessage =
+        error?.name === "AbortError"
+          ? "Upload took too long. Analysis was stopped before the server responded."
+          : "Something went wrong";
+      setMessage(errorMessage);
       toast.error("Something went wrong while generating charts.", {
         id: loadingToast,
       });
+    } finally {
+      clearTimeout(timeout);
+      setLoading(false);
+    }
+  }
+
+  async function handleExport(format) {
+    if (!latestDataset?.id) {
+      toast.error("Upload and render charts before exporting.");
+      return;
     }
 
-    setLoading(false);
+    if (!accessToken) {
+      toast.error("Please sign in again before exporting.");
+      return;
+    }
+
+    setExportingFormat(format);
+
+    try {
+      const response = await fetch("/api/export", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${accessToken}`,
+        },
+        body: JSON.stringify({
+          datasetId: latestDataset.id,
+          format,
+        }),
+      });
+
+      if (!response.ok) {
+        let errorMessage = "Export failed";
+        try {
+          const payload = await response.json();
+          errorMessage = payload?.error || errorMessage;
+        } catch {
+          // ignore json parse failure
+        }
+        throw new Error(errorMessage);
+      }
+
+      const blob = await response.blob();
+      const disposition = response.headers.get("content-disposition");
+      const headerFileName = parseFilenameFromDisposition(disposition);
+
+      const fallbackBaseName = String(latestDataset.fileName || "dataset")
+        .replace(/\.[^/.]+$/, "")
+        .replace(/[^a-zA-Z0-9._-]/g, "_");
+
+      const downloadName =
+        headerFileName || `${fallbackBaseName}.${extensionFromFormat(format)}`;
+
+      const blobUrl = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = blobUrl;
+      link.download = downloadName;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(blobUrl);
+
+      toast.success(`Exported ${downloadName}`);
+      setExportDialogOpen(false);
+    } catch (error) {
+      toast.error(error?.message || "Unable to export this dataset.");
+    } finally {
+      setExportingFormat("");
+    }
   }
 
   return (
@@ -727,6 +961,22 @@ export default function UploadFile() {
               {loading ? "Uploading..." : "Upload File"}
             </Button>
 
+            <Button
+              type="button"
+              variant="outline"
+              disabled={!canExportReports || loading || Boolean(exportingFormat)}
+              className="w-full border-white/20 bg-white/5 text-white hover:bg-white/10"
+              onClick={() => setExportDialogOpen(true)}
+            >
+              {exportingFormat ? "Exporting..." : "Export Reports"}
+            </Button>
+
+            <p className="text-xs text-white/60">
+              {canExportReports
+                ? "Canvas is ready. Export to PDF or PPT."
+                : "Export button unlocks after charts are generated."}
+            </p>
+
             {!canUpload && !authLoading ? (
               <p className="text-sm text-amber-200/90">
                 Sign in to enable uploads.
@@ -741,12 +991,19 @@ export default function UploadFile() {
       </Card>
 
       <div className="mt-10 w-full max-w-6xl">
-        {relationships.length ? (
+        {relationships.length || preparedCharts.charts.length ? (
           <div className="space-y-6">
             <div>
               <h2 className="text-2xl font-semibold">Suggested charts</h2>
               <p className="text-sm text-white/70">
                 Based on the uploaded dataset and AI analysis.
+              </p>
+              <p className="mt-2 text-xs text-white/60">
+                Rows: {analysisSummary.rowCount.toLocaleString()} | Columns:{" "}
+                {analysisSummary.columnCount.toLocaleString()}
+                {analysisSummary.sheetName
+                  ? ` | Sheet: ${analysisSummary.sheetName}`
+                  : ""}
               </p>
               {preparedCharts.skipped > 0 ? (
                 <p className="mt-2 text-xs text-amber-200/90">
@@ -758,39 +1015,61 @@ export default function UploadFile() {
             </div>
 
             {preparedCharts.charts.length ? (
-              <div className="grid gap-6 lg:grid-cols-2">
-                {preparedCharts.charts.map((chart, index) => (
-                  <Card
-                    key={chart.key}
-                    className="min-w-0 border border-white/10 bg-white/5"
-                  >
-                    <CardHeader className="space-y-2">
-                      <CardTitle className="text-lg font-semibold">
-                        {chart.title}
-                      </CardTitle>
-                      <p className="text-sm text-white/70">
-                        {chart.description}
-                      </p>
-                    </CardHeader>
-                    <CardContent className="min-w-0 space-y-4">
-                      <Separator className="bg-white/10" />
+              <div className="space-y-6">
+                {relationships.length ? (
+                  <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+                    {relationships.map((relationship, relationshipIndex) => {
+                      const columnsKey = Array.isArray(relationship?.columns)
+                        ? relationship.columns.join("-")
+                        : "none";
 
-                      <ChartViewport>
-                        {(size) => renderChartVisualization(chart, index, size)}
-                      </ChartViewport>
+                      return (
+                        <RelationshipSummaryCard
+                          key={`${columnsKey}-${relationship?.chartType || "bar"}-${relationshipIndex}`}
+                          relationship={relationship}
+                          index={relationshipIndex}
+                        />
+                      );
+                    })}
+                  </div>
+                ) : null}
 
-                      <div className="flex flex-wrap gap-2 text-xs text-white/60">
-                        <span>Type: {chart.chartType}</span>
-                        {chart.primary ? (
-                          <span>Primary: {chart.primary}</span>
-                        ) : null}
-                        {chart.secondary ? (
-                          <span>Secondary: {chart.secondary}</span>
-                        ) : null}
-                      </div>
-                    </CardContent>
-                  </Card>
-                ))}
+                <div className="grid gap-6 lg:grid-cols-2">
+                  {preparedCharts.charts.map((chart, index) => (
+                    <Card
+                      key={chart.key}
+                      className="min-w-0 border border-white/10 bg-white/5"
+                    >
+                      <CardHeader className="space-y-2">
+                        <CardTitle className="text-lg font-semibold">
+                          {chart.title}
+                        </CardTitle>
+                        <p className="text-sm text-white/70">
+                          {chart.description}
+                        </p>
+                      </CardHeader>
+                      <CardContent className="min-w-0 space-y-4">
+                        <Separator className="bg-white/10" />
+
+                        <ChartViewport>
+                          {(size) =>
+                            renderChartVisualization(chart, index, size)
+                          }
+                        </ChartViewport>
+
+                        <div className="flex flex-wrap gap-2 text-xs text-white/60">
+                          <span>Type: {chart.chartType}</span>
+                          {chart.primary ? (
+                            <span>Primary: {chart.primary}</span>
+                          ) : null}
+                          {chart.secondary ? (
+                            <span>Secondary: {chart.secondary}</span>
+                          ) : null}
+                        </div>
+                      </CardContent>
+                    </Card>
+                  ))}
+                </div>
               </div>
             ) : (
               <Card className="border border-white/10 bg-white/5">
@@ -809,6 +1088,71 @@ export default function UploadFile() {
           </Card>
         )}
       </div>
+
+      <Dialog
+        open={exportDialogOpen}
+        onOpenChange={(open) => {
+          if (exportingFormat) return;
+          setExportDialogOpen(open);
+        }}
+      >
+        <DialogContent className="border border-white/10 bg-[#0a1328] text-white sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Export report</DialogTitle>
+            <DialogDescription className="text-white/65">
+              Choose a format. Each export includes the complete table and all
+              generated chart visualizations.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-white/80">
+            <p className="font-medium text-white">
+              {latestDataset?.fileName || "Current upload"}
+            </p>
+            <p className="text-xs text-white/55">
+              Choose PDF or PPT for this rendered canvas.
+            </p>
+          </div>
+
+          <div className="grid gap-3">
+            {EXPORT_OPTIONS.map((option) => {
+              const isCurrent = exportingFormat === option.format;
+
+              return (
+                <Button
+                  key={option.format}
+                  type="button"
+                  variant="outline"
+                  className="h-auto justify-start border-white/10 bg-white/5 px-4 py-3 text-left text-white hover:bg-white/10"
+                  disabled={Boolean(exportingFormat) || !canExportReports}
+                  onClick={() => handleExport(option.format)}
+                >
+                  <span className="flex flex-col items-start">
+                    <span className="text-sm font-medium">
+                      {isCurrent ? "Exporting..." : option.title}
+                    </span>
+                    <span className="text-xs text-white/60">
+                      {option.subtitle}
+                    </span>
+                  </span>
+                </Button>
+              );
+            })}
+          </div>
+
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="ghost"
+              className="text-white/70 hover:bg-white/10 hover:text-white"
+              onClick={() => setExportDialogOpen(false)}
+              disabled={Boolean(exportingFormat)}
+            >
+              Close
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

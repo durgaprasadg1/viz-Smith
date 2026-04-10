@@ -23,6 +23,23 @@ async function signUpNewUser(email, password, redirectTo, fullName) {
   return data;
 }
 
+function createAdminClient() {
+  const { supabaseURL } = getEnvVar();
+  const serviceRoleKey =
+    process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SERVICE_ROLE_KEY;
+
+  if (!serviceRoleKey) {
+    throw new Error("Missing service role key");
+  }
+
+  return createClient(supabaseURL, serviceRoleKey, {
+    auth: {
+      persistSession: false,
+      autoRefreshToken: false,
+    },
+  });
+}
+
 export async function POST(request) {
   try {
     const { email, password, name } = await request.json();

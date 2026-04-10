@@ -49,6 +49,10 @@
 }
 
 :root {
+  --font-sans:
+    "Segoe UI", "Inter", "SF Pro Display", ui-sans-serif, system-ui, sans-serif;
+  --font-geist-mono:
+    "Cascadia Mono", "JetBrains Mono", "SFMono-Regular", ui-monospace, monospace;
   --background: oklch(1 0 0);
   --foreground: oklch(0.145 0 0);
   --card: oklch(1 0 0);

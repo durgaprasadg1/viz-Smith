@@ -2,6 +2,7 @@
 -- CLEAN RESET (WARNING: DROPS OLD TABLES)
 -- =========================================
 drop table if exists datasets cascade;
+drop table if exists dataset_exports cascade;
 drop table if exists profiles cascade;
 drop function if exists set_updated_at() cascade;
 
@@ -45,12 +46,19 @@ create trigger trg_profiles_updated_at
 before update on profiles
 for each row execute function set_updated_at();
 
--- Trigger: when a new auth user is created, create matching profile
-drop trigger if exists on_auth_user_created on auth.users;
-
-create trigger on_auth_user_created
-after insert on auth.users
-for each row execute function public.handle_new_user();
+-- When a new auth user is created, create a matching profile row
+do $$
+begin
+  if not exists (
+    select 1 from pg_trigger
+    where tgname = 'on_auth_user_created'
+  ) then
+    create trigger on_auth_user_created
+    after insert on auth.users
+    for each row execute function public.handle_new_user();
+  end if;
+end;
+$$;
 
 -- =========================================
 -- DATASETS TABLE
@@ -58,7 +66,9 @@ for each row execute function public.handle_new_user();
 create table if not exists datasets (
   id uuid primary key default gen_random_uuid(),
 
-  user_id uuid not null references profiles(id) on delete cascade,
+  -- link datasets directly to auth.users so a profile row
+  -- is not required before uploads/exports work
+  user_id uuid not null references auth.users(id) on delete cascade,
 
   -- file info
   file_name text not null,
@@ -95,6 +105,31 @@ before update on datasets
 for each row execute function set_updated_at();
 
 -- =========================================
+-- DATASET EXPORTS TABLE
+-- =========================================
+create table if not exists dataset_exports (
+  id uuid primary key default gen_random_uuid(),
+  dataset_id uuid not null references datasets(id) on delete cascade,
+  user_id uuid not null references auth.users(id) on delete cascade,
+  format text not null check (format in ('pdf', 'ppt')),
+  file_name text not null,
+  file_size bigint,
+  storage_bucket text,
+  storage_path text,
+  created_at timestamptz not null default now()
+);
+
+create index idx_dataset_exports_dataset_id on dataset_exports(dataset_id);
+create index idx_dataset_exports_user_id on dataset_exports(user_id);
+
+-- Ensure the datasets.user_id foreign key points at auth.users,
+-- even if an older version of this script created it against profiles.
+alter table if exists datasets
+  drop constraint if exists datasets_user_id_fkey,
+  add constraint datasets_user_id_fkey
+    foreign key (user_id) references auth.users(id) on delete cascade;
+
+-- =========================================
 -- STORAGE BUCKETS
 -- =========================================
 insert into storage.buckets (id, name)
@@ -104,19 +139,9 @@ on conflict (id) do nothing;
 -- =========================================
 -- ENABLE RLS
 -- =========================================
--- Tables created via Dashboard UI
-
-select schemaname, tablename, tableowner
-from pg_tables
-where schemaname = 'public';
-
-
-
-alter table public.profiles owner to postgres;
-alter table public.datasets owner to postgres;
-
--- Functions created by another role
-alter function public.set_updated_at() owner to postgres;
+alter table profiles enable row level security;
+alter table datasets enable row level security;
+alter table dataset_exports enable row level security;
 
 -- =========================================
 -- RLS: PROFILES
@@ -157,32 +182,19 @@ for delete
 using (auth.uid() = user_id::uuid);
 
 -- =========================================
--- RLS: STORAGE (user-uploads bucket)
+-- RLS: DATASET_EXPORTS
 -- =========================================
-create policy "Users can upload to own folder"
-on storage.objects
-for insert
-to authenticated
-with check (
-  bucket_id = 'user-uploads' and
-  (storage.foldername(name))[1] = (select auth.jwt()->>'sub')
-);
-
-create policy "Users can view own uploads"
-on storage.objects
+create policy "Users can view own dataset exports"
+on dataset_exports
 for select
-to authenticated
-using (
-  bucket_id = 'user-uploads' and
-  owner_id = (select auth.uid())
-);
+using (auth.uid() = user_id::uuid);
 
-create policy "Users can delete own uploads"
-on storage.objects
+create policy "Users can insert own dataset exports"
+on dataset_exports
+for insert
+with check (auth.uid() = user_id::uuid);
+
+create policy "Users can delete own dataset exports"
+on dataset_exports
 for delete
-to authenticated
-using (
-  bucket_id = 'user-uploads' and
-  owner_id = (select auth.uid())
-);
-
+using (auth.uid() = user_id::uuid);
