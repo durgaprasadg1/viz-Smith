@@ -30,6 +30,7 @@ export default function HeroVisual() {
             src="/image/dv.png"
             alt="AI Data Visualization"
             fill
+            sizes=""
             priority
             className="object-contain"
           />

@@ -21,6 +21,16 @@ begin
 end;
 $$ language plpgsql;
 
+-- Automatically create a profile row when a new auth user is created
+create or replace function public.handle_new_user()
+returns trigger as $$
+begin
+  insert into public.profiles (id, full_name)
+  values (new.id, coalesce(new.raw_user_meta_data->>'full_name', null));
+  return new;
+end;
+$$ language plpgsql security definer;
+
 -- =========================================
 -- PROFILES TABLE
 -- =========================================
@@ -35,13 +45,29 @@ create trigger trg_profiles_updated_at
 before update on profiles
 for each row execute function set_updated_at();
 
+-- When a new auth user is created, create a matching profile row
+do $$
+begin
+  if not exists (
+    select 1 from pg_trigger
+    where tgname = 'on_auth_user_created'
+  ) then
+    create trigger on_auth_user_created
+    after insert on auth.users
+    for each row execute function public.handle_new_user();
+  end if;
+end;
+$$;
+
 -- =========================================
 -- DATASETS TABLE
 -- =========================================
 create table if not exists datasets (
   id uuid primary key default gen_random_uuid(),
 
-  user_id uuid not null references profiles(id) on delete cascade,
+  -- link datasets directly to auth.users so a profile row
+  -- is not required before uploads/exports work
+  user_id uuid not null references auth.users(id) on delete cascade,
 
   -- file info
   file_name text not null,
@@ -77,6 +103,13 @@ create trigger trg_datasets_updated_at
 before update on datasets
 for each row execute function set_updated_at();
 
+-- Ensure the datasets.user_id foreign key points at auth.users,
+-- even if an older version of this script created it against profiles.
+alter table if exists datasets
+  drop constraint if exists datasets_user_id_fkey,
+  add constraint datasets_user_id_fkey
+    foreign key (user_id) references auth.users(id) on delete cascade;
+
 -- =========================================
 -- STORAGE BUCKETS
 -- =========================================
@@ -89,7 +122,6 @@ on conflict (id) do nothing;
 -- =========================================
 alter table profiles enable row level security;
 alter table datasets enable row level security;
-alter table storage.objects enable row level security;
 
 -- =========================================
 -- RLS: PROFILES
@@ -115,50 +147,19 @@ using (auth.uid() = id);
 create policy "Users can view own datasets"
 on datasets
 for select
-using (auth.uid() = user_id);
+using (auth.uid() = user_id::uuid);
 
 create policy "Users can insert own datasets"
 on datasets
 for insert
-with check (auth.uid() = user_id);
+with check (auth.uid() = user_id::uuid);
 
 create policy "Users can update own datasets"
 on datasets
 for update
-using (auth.uid() = user_id);
+using (auth.uid() = user_id::uuid);
 
 create policy "Users can delete own datasets"
 on datasets
 for delete
-using (auth.uid() = user_id);
-
--- =========================================
--- RLS: STORAGE (user-uploads bucket)
--- =========================================
-create policy "Users can upload to own folder"
-on storage.objects
-for insert
-to authenticated
-with check (
-  bucket_id = 'user-uploads' and
-  (storage.foldername(name))[1] = (select auth.jwt()->>'sub')
-);
-
-create policy "Users can view own uploads"
-on storage.objects
-for select
-to authenticated
-using (
-  bucket_id = 'user-uploads' and
-  owner_id = (select auth.uid())
-);
-
-create policy "Users can delete own uploads"
-on storage.objects
-for delete
-to authenticated
-using (
-  bucket_id = 'user-uploads' and
-  owner_id = (select auth.uid())
-);
-
+using (auth.uid() = user_id::uuid);
