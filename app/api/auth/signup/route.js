@@ -55,21 +55,6 @@ export async function POST(request) {
 
     const data = await signUpNewUser(email, password, redirectTo, name);
 
-    if (data?.user?.id) {
-      const admin = createAdminClient();
-      const { error: profileError } = await admin.from("profiles").upsert({
-        id: data.user.id,
-        full_name: name ?? null,
-      });
-
-      if (profileError) {
-        return NextResponse.json(
-          { error: profileError.message ?? "Failed to create profile" },
-          { status: 500 },
-        );
-      }
-    }
-
     return NextResponse.json(
       { data, requiresEmailConfirmation: !data?.session },
       { status: 200 },

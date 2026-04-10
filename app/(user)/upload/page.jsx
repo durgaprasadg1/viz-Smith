@@ -5,6 +5,14 @@ import { createSupabaseClient } from "@/lib/supabase";
 import useAuth from "@/hooks/useAuth";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Separator } from "@/components/ui/separator";
 import { toast } from "sonner";
@@ -37,6 +45,19 @@ const CHART_COLORS = [
   "#34D399",
   "#F59E0B",
   "#60A5FA",
+];
+
+const EXPORT_OPTIONS = [
+  {
+    format: "pdf",
+    title: "Export as PDF",
+    subtitle: "Report style document with complete table and all charts",
+  },
+  {
+    format: "ppt",
+    title: "Export as PPT",
+    subtitle: "Slides with full dataset table and chart visualizations",
+  },
 ];
 
 const CHART_INITIAL_DIMENSION = {
@@ -98,6 +119,29 @@ function normalizeChartType(value) {
     .toLowerCase()
     .replace(/[^a-z]/g, "");
   return CHART_TYPE_ALIAS[normalized] || "bar";
+}
+
+function parseFilenameFromDisposition(disposition) {
+  if (!disposition) return null;
+
+  const utfMatch = disposition.match(/filename\*=UTF-8''([^;]+)/i);
+  if (utfMatch?.[1]) {
+    try {
+      return decodeURIComponent(utfMatch[1]);
+    } catch {
+      return utfMatch[1];
+    }
+  }
+
+  const regularMatch = disposition.match(/filename="?([^";]+)"?/i);
+  if (regularMatch?.[1]) return regularMatch[1];
+
+  return null;
+}
+
+function extensionFromFormat(format) {
+  if (format === "ppt") return "pptx";
+  return "pdf";
 }
 
 function toNumber(value) {
@@ -619,6 +663,9 @@ export default function UploadFile() {
     charts: [],
     skipped: 0,
   });
+  const [latestDataset, setLatestDataset] = useState(null);
+  const [exportDialogOpen, setExportDialogOpen] = useState(false);
+  const [exportingFormat, setExportingFormat] = useState("");
 
   useEffect(() => {
     let isMounted = true;
@@ -644,6 +691,14 @@ export default function UploadFile() {
     return !authLoading && Boolean(user) && Boolean(accessToken);
   }, [authLoading, user, accessToken]);
 
+  const canExportReports = useMemo(() => {
+    return (
+      Boolean(accessToken) &&
+      Boolean(latestDataset?.id) &&
+      preparedCharts.charts.length > 0
+    );
+  }, [accessToken, latestDataset, preparedCharts]);
+
   async function handleUpload(e) {
     e.preventDefault();
     setMessage("");
@@ -652,6 +707,9 @@ export default function UploadFile() {
     setRows([]);
     setAnalysisSummary({ rowCount: 0, columnCount: 0, sheetName: null });
     setPreparedCharts({ charts: [], skipped: 0 });
+    setLatestDataset(null);
+    setExportDialogOpen(false);
+    setExportingFormat("");
 
     if (!canUpload) {
       setMessage("Please sign in to upload files.");
@@ -737,6 +795,17 @@ export default function UploadFile() {
               : null,
         });
         setPreparedCharts(serverPreparedCharts);
+        setLatestDataset(
+          data?.dataset?.id
+            ? {
+                id: data.dataset.id,
+                fileName:
+                  data?.dataset?.file_name ||
+                  data?.dataset?.fileName ||
+                  file.name,
+              }
+            : null,
+        );
         form.reset();
 
         if (!hasServerPreparedCharts && fallbackPreview.charts.length) {
@@ -788,6 +857,72 @@ export default function UploadFile() {
     }
   }
 
+  async function handleExport(format) {
+    if (!latestDataset?.id) {
+      toast.error("Upload and render charts before exporting.");
+      return;
+    }
+
+    if (!accessToken) {
+      toast.error("Please sign in again before exporting.");
+      return;
+    }
+
+    setExportingFormat(format);
+
+    try {
+      const response = await fetch("/api/export", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${accessToken}`,
+        },
+        body: JSON.stringify({
+          datasetId: latestDataset.id,
+          format,
+        }),
+      });
+
+      if (!response.ok) {
+        let errorMessage = "Export failed";
+        try {
+          const payload = await response.json();
+          errorMessage = payload?.error || errorMessage;
+        } catch {
+          // ignore json parse failure
+        }
+        throw new Error(errorMessage);
+      }
+
+      const blob = await response.blob();
+      const disposition = response.headers.get("content-disposition");
+      const headerFileName = parseFilenameFromDisposition(disposition);
+
+      const fallbackBaseName = String(latestDataset.fileName || "dataset")
+        .replace(/\.[^/.]+$/, "")
+        .replace(/[^a-zA-Z0-9._-]/g, "_");
+
+      const downloadName =
+        headerFileName || `${fallbackBaseName}.${extensionFromFormat(format)}`;
+
+      const blobUrl = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = blobUrl;
+      link.download = downloadName;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(blobUrl);
+
+      toast.success(`Exported ${downloadName}`);
+      setExportDialogOpen(false);
+    } catch (error) {
+      toast.error(error?.message || "Unable to export this dataset.");
+    } finally {
+      setExportingFormat("");
+    }
+  }
+
   return (
     <div className="min-h-screen bg-[#0B1020] text-white flex flex-col items-center px-4 py-12 relative overflow-hidden">
       <div className="pointer-events-none absolute inset-0 -z-10">
@@ -827,6 +962,24 @@ export default function UploadFile() {
             >
               {loading ? "Uploading..." : "Upload File"}
             </Button>
+
+            <Button
+              type="button"
+              variant="outline"
+              disabled={
+                !canExportReports || loading || Boolean(exportingFormat)
+              }
+              className="w-full border-white/20 bg-white/5 text-white hover:bg-white/10"
+              onClick={() => setExportDialogOpen(true)}
+            >
+              {exportingFormat ? "Exporting..." : "Export Reports"}
+            </Button>
+
+            <p className="text-xs text-white/60">
+              {canExportReports
+                ? "Canvas is ready. Export to PDF or PPT."
+                : "Export button unlocks after charts are generated."}
+            </p>
 
             {!canUpload && !authLoading ? (
               <p className="text-sm text-amber-200/90">
@@ -939,6 +1092,71 @@ export default function UploadFile() {
           </Card>
         )}
       </div>
+
+      <Dialog
+        open={exportDialogOpen}
+        onOpenChange={(open) => {
+          if (exportingFormat) return;
+          setExportDialogOpen(open);
+        }}
+      >
+        <DialogContent className="border border-white/10 bg-[#0a1328] text-white sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Export report</DialogTitle>
+            <DialogDescription className="text-white/65">
+              Choose a format. Each export includes the complete table and all
+              generated chart visualizations.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-white/80">
+            <p className="font-medium text-white">
+              {latestDataset?.fileName || "Current upload"}
+            </p>
+            <p className="text-xs text-white/55">
+              Choose PDF or PPT for this rendered canvas.
+            </p>
+          </div>
+
+          <div className="grid gap-3">
+            {EXPORT_OPTIONS.map((option) => {
+              const isCurrent = exportingFormat === option.format;
+
+              return (
+                <Button
+                  key={option.format}
+                  type="button"
+                  variant="outline"
+                  className="h-auto justify-start border-white/10 bg-white/5 px-4 py-3 text-left text-white hover:bg-white/10"
+                  disabled={Boolean(exportingFormat) || !canExportReports}
+                  onClick={() => handleExport(option.format)}
+                >
+                  <span className="flex flex-col items-start">
+                    <span className="text-sm font-medium">
+                      {isCurrent ? "Exporting..." : option.title}
+                    </span>
+                    <span className="text-xs text-white/60">
+                      {option.subtitle}
+                    </span>
+                  </span>
+                </Button>
+              );
+            })}
+          </div>
+
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="ghost"
+              className="text-white/70 hover:bg-white/10 hover:text-white"
+              onClick={() => setExportDialogOpen(false)}
+              disabled={Boolean(exportingFormat)}
+            >
+              Close
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

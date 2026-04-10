@@ -41,7 +41,7 @@ export default function HeroSection() {
               variant="secondary"
               className="h-12 px-7 rounded-xl bg-white/8 text-white border border-white/10 hover:bg-white/12"
             >
-              <Link href="/demo">Request Demo</Link>
+              <Link href="/">Request Demo</Link>
             </Button>
           </div>
         </div>

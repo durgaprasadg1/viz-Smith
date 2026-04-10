@@ -111,7 +111,7 @@ create table if not exists dataset_exports (
   id uuid primary key default gen_random_uuid(),
   dataset_id uuid not null references datasets(id) on delete cascade,
   user_id uuid not null references auth.users(id) on delete cascade,
-  format text not null check (format in ('pdf', 'ppt', 'excel')),
+  format text not null check (format in ('pdf', 'ppt')),
   file_name text not null,
   file_size bigint,
   storage_bucket text,
@@ -161,9 +161,6 @@ on profiles
 for update
 using (auth.uid() = id);
 
--- =========================================
--- RLS: DATASETS
--- =========================================
 create policy "Users can view own datasets"
 on datasets
 for select

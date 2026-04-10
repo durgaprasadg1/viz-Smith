@@ -6,12 +6,40 @@ import { analyzeDatasetBuffer } from "@/lib/dataset-analysis";
 import { buildExportFile } from "@/lib/exporters";
 import { getEnvVar } from "@/lib/supabase";
 
-const ALLOWED_EXPORT_FORMATS = new Set(["pdf", "ppt", "excel"]);
+const ALLOWED_EXPORT_FORMATS = new Set(["pdf", "ppt"]);
 
 export const runtime = "nodejs";
 
 function unique(values) {
   return [...new Set(values.filter(Boolean))];
+}
+
+function stripLeadingSlash(value) {
+  return String(value || "").replace(/^\/+/, "");
+}
+
+function extractObjectPathFromUrl(rawValue) {
+  try {
+    const url = new URL(String(rawValue || ""));
+    const pathname = decodeURIComponent(url.pathname || "");
+    const markers = [
+      "/storage/v1/object/public/",
+      "/storage/v1/object/authenticated/",
+      "/storage/v1/object/sign/",
+      "/storage/v1/object/",
+    ];
+
+    for (const marker of markers) {
+      const index = pathname.indexOf(marker);
+      if (index !== -1) {
+        return stripLeadingSlash(pathname.slice(index + marker.length));
+      }
+    }
+
+    return stripLeadingSlash(pathname);
+  } catch {
+    return null;
+  }
 }
 
 function getAccessTokenFromRequest(req) {
@@ -36,14 +64,55 @@ function createAuthorizedSupabaseClient(token) {
 }
 
 function getStorageDownloadCandidates(dataset) {
-  const primaryPath =
-    typeof dataset?.storage_path === "string"
-      ? dataset.storage_path.trim()
-      : "";
+  const metadata =
+    dataset?.metadata && typeof dataset.metadata === "object"
+      ? dataset.metadata
+      : {};
+
+  const buckets = unique([
+    dataset?.storage_bucket,
+    metadata?.storage_bucket,
+    metadata?.storageBucket,
+    "user-uploads",
+    "raw-uploads",
+  ]);
+
+  const rawPaths = unique([
+    dataset?.storage_path,
+    metadata?.storage_path,
+    metadata?.storagePath,
+    metadata?.file_path,
+    metadata?.filePath,
+    metadata?.upload_path,
+    metadata?.uploadPath,
+  ]);
+
+  const paths = new Set();
+
+  rawPaths.forEach((candidate) => {
+    const raw = String(candidate || "").trim();
+    if (!raw) return;
+
+    const fromUrl = extractObjectPathFromUrl(raw);
+    const baseCandidates = unique([raw, stripLeadingSlash(raw), fromUrl]);
+
+    baseCandidates.forEach((value) => {
+      const normalized = String(value || "").trim();
+      if (!normalized) return;
+      paths.add(normalized);
+
+      buckets.forEach((bucket) => {
+        const prefix = `${bucket}/`;
+        if (normalized.startsWith(prefix)) {
+          paths.add(normalized.slice(prefix.length));
+        }
+      });
+    });
+  });
 
   return {
-    buckets: unique([dataset?.storage_bucket, "user-uploads", "raw-uploads"]),
-    paths: unique([primaryPath, primaryPath.replace(/^\/+/, "")]),
+    buckets,
+    paths: unique(Array.from(paths)),
   };
 }
 
@@ -138,7 +207,8 @@ export async function POST(req) {
     }
 
     const { supabaseURL } = getEnvVar();
-    const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+    const serviceRoleKey =
+      process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SERVICE_ROLE_KEY;
     const storageClient = serviceRoleKey
       ? createClient(supabaseURL, serviceRoleKey, {
           auth: {
