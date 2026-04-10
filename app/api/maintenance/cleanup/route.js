@@ -1,7 +1,9 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 
-export const runtime = "nodejs";
+import { invalidateUserDatasetCaches } from "@/lib/redis-cache";
+
+// export const runtime = "nodejs";
 
 function getInternalToken(req) {
   return req.headers.get("x-maintenance-token") || "";
@@ -32,12 +34,23 @@ export async function POST(req) {
     const secret = getCleanupSecret();
     const token = getInternalToken(req);
 
-    if (!secret || token !== secret) {
+    if (!secret) {
+      return NextResponse.json(
+        {
+          error:
+            "Cleanup secret is not configured. Set MAINTENANCE_SECRET (or CLEANUP_SECRET) and pass it in x-maintenance-token.",
+        },
+        { status: 500 },
+      );
+    }
+
+    if (token !== secret) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
 
     const supabaseURL = process.env.NEXT_PUBLIC_SUPABASE_URL;
-    const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+    const serviceRoleKey =
+      process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SERVICE_ROLE_KEY;
 
     if (!supabaseURL || !serviceRoleKey) {
       return NextResponse.json(
@@ -56,7 +69,7 @@ export async function POST(req) {
     const nowIso = new Date().toISOString();
     const { data: expiredDatasets, error: selectError } = await supabase
       .from("datasets")
-      .select("id, storage_bucket, storage_path")
+      .select("id, user_id, storage_bucket, storage_path")
       .lt("expires_at", nowIso)
       .limit(1000);
 
@@ -95,10 +108,28 @@ export async function POST(req) {
       return NextResponse.json({ error: deleteError.message }, { status: 500 });
     }
 
+    const affectedUsers = new Map();
+
+    items.forEach((item) => {
+      const userId = String(item.user_id || "").trim();
+      if (!userId) return;
+
+      const currentIds = affectedUsers.get(userId) || [];
+      if (item.id) currentIds.push(item.id);
+      affectedUsers.set(userId, currentIds);
+    });
+
+    for (const [userId, datasetIds] of affectedUsers.entries()) {
+      await invalidateUserDatasetCaches({ userId, datasetIds }).catch(
+        () => undefined,
+      );
+    }
+
     return NextResponse.json({
       success: true,
       deletedDatasets: ids.length,
       attemptedStorageDeletes,
+      invalidatedUsers: affectedUsers.size,
     });
   } catch (error) {
     return NextResponse.json(

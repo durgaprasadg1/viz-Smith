@@ -131,25 +131,36 @@ export default function HistoryPage() {
         return;
       }
 
-      setLoadingHistory(true);
-      setError("");
-
-      const { data, error: queryError } = await supabase
-        .from("datasets")
-        .select("id, file_name, status, created_at, uploaded_at")
-        .eq("user_id", user.id)
-        .order("uploaded_at", { ascending: false });
-
-      if (!active) return;
-
-      if (queryError) {
+      if (!accessToken) {
+        if (!active) return;
         setHistoryRows([]);
-        setError(queryError.message || "Unable to load history.");
+        setError("Please sign in again to view upload history.");
         setLoadingHistory(false);
         return;
       }
 
-      const mappedRows = (data || []).map((item) => ({
+      setLoadingHistory(true);
+      setError("");
+
+      const response = await fetch("/api/user/history", {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+        },
+        cache: "no-store",
+      });
+
+      const payload = await response.json().catch(() => ({}));
+
+      if (!active) return;
+
+      if (!response.ok) {
+        setHistoryRows([]);
+        setError(payload?.error || "Unable to load history.");
+        setLoadingHistory(false);
+        return;
+      }
+
+      const mappedRows = (payload?.items || []).map((item) => ({
         id: item.id,
         date: item.created_at || item.uploaded_at || "",
         uploadedAt: item.uploaded_at || item.created_at || "",
@@ -168,7 +179,7 @@ export default function HistoryPage() {
     return () => {
       active = false;
     };
-  }, [authLoading, user]);
+  }, [accessToken, authLoading, user]);
 
   const openExportDialog = useCallback((dataset) => {
     setSelectedDataset(dataset);

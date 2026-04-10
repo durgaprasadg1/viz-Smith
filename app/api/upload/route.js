@@ -7,6 +7,7 @@ import {
   analyzeDatasetBuffer,
 } from "@/lib/dataset-analysis";
 import { buildPreparedCharts } from "@/lib/chart-preparation";
+import { invalidateUserDatasetCaches } from "@/lib/redis-cache";
 import { getEnvVar } from "@/lib/supabase";
 
 const SUPPORTED_EXTENSIONS = [".csv", ".xlsx"];
@@ -224,6 +225,10 @@ export async function POST(req) {
         { status: 500 },
       );
     }
+
+    await invalidateUserDatasetCaches({ userId: user.id }).catch(
+      () => undefined,
+    );
 
     return NextResponse.json({
       success: true,
