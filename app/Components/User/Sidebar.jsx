@@ -25,6 +25,7 @@ import { Button } from "@/components/ui/button";
 import { createSupabaseClient } from "@/lib/supabase";
 import { usePathname, useRouter } from "next/navigation";
 import { useState } from "react";
+import Link from "next/link";
 const navItems = [
   { icon: LayoutDashboard, label: "Dashboard", href: "/dashboard" },
   { icon: Upload, label: "Upload", href: "/upload" },
@@ -52,10 +53,12 @@ export default function Sidebar() {
   return (
     <aside className="w-[280px] min-h-screen border-r border-white/10 bg-[#040918] px-6 py-6 flex flex-col">
       <div>
-        <span className="flex items-center gap-2">
-          <h1 className="text-2xl font-bold tracking-tight">VizSmith AI</h1>
-          <Sparkles className="w-4 h-4" />
-        </span>
+        <Link href="/">
+          <span className="flex items-center gap-2">
+            <h1 className="text-2xl font-bold tracking-tight">VizSmith AI</h1>
+            <Sparkles className="w-4 h-4" />
+          </span>
+        </Link>
       </div>
 
       <nav className="mt-8 space-y-2">

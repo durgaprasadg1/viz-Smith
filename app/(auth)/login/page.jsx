@@ -15,8 +15,11 @@ import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 import { createSupabaseClient } from "@/lib/supabase";
-import Navbar from "@/app/Components/Home/Navbar";
-
+import AnimatedCharts from "@/app/Components/AnimatedCharts";
+import { Left } from "@hugeicons/core-free-icons";
+import { Chevron } from "react-day-picker";
+import { ChevronLeft } from "lucide-react";
+import { providers } from "@/lib/supabase";
 const supabase = createSupabaseClient();
 
 export default function LoginPage() {
@@ -81,17 +84,27 @@ export default function LoginPage() {
   };
 
   return (
-    <>
-   
-    <div className="min-h-screen bg-[#0B1020] text-white flex items-center justify-center px-4 relative overflow-hidden">
-      
-      <div className="pointer-events-none absolute inset-0 -z-10">
-        <div className="absolute top-[-120px] left-[-100px] w-[320px] h-[320px] bg-[#8B5CF6]/20 blur-[120px] rounded-full" />
-        <div className="absolute top-[180px] right-[-100px] w-[280px] h-[280px] bg-[#22D3EE]/20 blur-[120px] rounded-full" />
-        <div className="absolute bottom-[-80px] left-[30%] w-[350px] h-[350px] bg-[#F472B6]/10 blur-[140px] rounded-full" />
+    <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-[#0B1020] px-4 text-white">
+      <div className="absolute inset-0 -z-10">
+        <div className="absolute left-[-100px] top-[-120px] h-[340px] w-[340px] rounded-full bg-[#8B5CF6]/20 blur-[120px]" />
+        <div className="absolute bottom-[-100px] right-[-90px] h-[340px] w-[340px] rounded-full bg-[#22D3EE]/15 blur-[120px]" />
       </div>
 
-      <Card className="w-full max-w-md shadow-[0_30px_120px_-60px_rgba(34,211,238,0.6)] rounded-3xl border border-white/10 bg-white/5 backdrop-blur">
+      <Button
+        type="button"
+        onClick={() => router.push("/")}
+        className="absolute left-6 top-6 z-30 rounded-full border border-white/15 bg-white/5 px-4 py-2 text-sm text-white/85 transition hover:bg-white/10 hover:text-white"
+      >
+        <ChevronLeft className="mr-1 h-4 w-4" />
+        Back
+      </Button>
+
+      <AnimatedCharts
+        layout="login"
+        className="pointer-events-none absolute inset-0 z-0"
+      />
+
+      <Card className="relative z-20 w-full max-w-md rounded-3xl border border-white/10 bg-white/5 shadow-[0_30px_120px_-60px_rgba(34,211,238,0.6)] backdrop-blur">
         <CardHeader className="space-y-2 text-center">
           <CardTitle className="text-3xl font-bold tracking-tight">
             Login
@@ -115,7 +128,7 @@ export default function LoginPage() {
                 value={formData.email}
                 onChange={handleChange}
                 required
-                className="bg-white/5 border-white/10 text-white placeholder:text-white/40 focus-visible:ring-[#22D3EE]/40"
+                className="border-white/10 bg-white/5 text-white placeholder:text-white/40 focus-visible:ring-[#22D3EE]/40"
               />
             </div>
 
@@ -131,18 +144,22 @@ export default function LoginPage() {
                 value={formData.password}
                 onChange={handleChange}
                 required
-                className="bg-white/5 border-white/10 text-white placeholder:text-white/40 focus-visible:ring-[#22D3EE]/40"
+                className="border-white/10 bg-white/5 text-white placeholder:text-white/40 focus-visible:ring-[#22D3EE]/40"
               />
             </div>
 
             <Button
               type="submit"
-              className="w-full bg-gradient-to-r from-[#22D3EE] via-[#8B5CF6] to-[#F472B6] text-slate-950 font-semibold hover:opacity-90"
+              className="w-full bg-gradient-to-r from-[#22D3EE] via-[#8B5CF6] to-[#F472B6] font-semibold text-slate-950 hover:opacity-90"
               disabled={loading}
             >
               {loading ? "Logging in..." : "Login"}
             </Button>
+            
           </form>
+          <Button onClick={providers.signInWithGoogle}>Continue with Google</Button>
+        <br />
+            <Button onClick={providers.signInWithGitHub}>Continue with GitHub</Button>
 
           <p className="mt-6 text-center text-sm text-white/70">
             Don&apos;t have an account?{" "}
@@ -156,6 +173,5 @@ export default function LoginPage() {
         </CardContent>
       </Card>
     </div>
-     </>
   );
 }

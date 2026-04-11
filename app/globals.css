@@ -175,3 +175,12 @@
   animation-name: hero-chip-float-up;
   animation-delay: -3s;
 }
+
+/* JS-driven drifting chips with cursor repulsion */
+.drift-chip {
+  will-change: transform;
+  transition: transform 180ms linear;
+  pointer-events: none;
+  user-select: none;
+  -webkit-user-drag: none;
+}
