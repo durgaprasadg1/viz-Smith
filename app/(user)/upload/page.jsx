@@ -337,7 +337,12 @@ function buildPreparedCharts(relationships, rows, columns) {
         renderType = "bar";
       }
     } else if (chartType === "pie" || chartType === "donut") {
+      // Prefer categorical counts for pie/donut. If primary yields no
+      // categories (e.g. primary is numeric), try swapping to secondary.
       chartData = buildBarData(safeRows, primary, secondary);
+      if (!chartData.length && secondary) {
+        chartData = buildBarData(safeRows, secondary, primary);
+      }
     } else if (chartType === "histogram") {
       chartData = buildHistogramData(safeRows, secondary || primary);
       if (!chartData.length) {
@@ -615,33 +620,29 @@ function RelationshipSummaryCard({ relationship, index }) {
       "No description provided.",
   );
 
+  // Compact card: only show the primary columns and chart type to save space.
+  const displayColumns = columns.length
+    ? columns.slice(0, 3).join(", ") +
+      (columns.length > 3 ? ` +${columns.length - 3}` : "")
+    : "No columns";
+
   return (
-    <Card className="border border-cyan-300/20 bg-slate-950/50">
-      <CardHeader className="space-y-1 pb-3">
-        <CardTitle className="text-base font-semibold text-cyan-100">
-          Recommendation {index + 1}
-        </CardTitle>
-        <p className="text-xs uppercase tracking-wide text-cyan-200/80">
-          {chartType}
-        </p>
-      </CardHeader>
-      <CardContent className="space-y-3">
-        <div className="flex flex-wrap gap-2">
-          {columns.length ? (
-            columns.map((column, colIndex) => (
-              <span
-                key={`${column}-${colIndex}`}
-                className="rounded-full border border-white/15 bg-white/5 px-2.5 py-1 text-xs text-white/80"
-              >
-                {column}
-              </span>
-            ))
-          ) : (
-            <span className="text-xs text-white/50">No columns detected</span>
-          )}
+    <Card className="border border-white/10 bg-white/5">
+      <CardHeader className="flex items-center justify-between gap-2 ">
+        <div className="min-w-0">
+          <CardTitle className="text-sm font-medium text-white/90 truncate">
+            {displayColumns}
+          </CardTitle>
+          <p className="text-xs text-white/60 truncate">
+            {relationship?.title || "Recommendation"}
+          </p>
         </div>
-        <p className="text-sm leading-relaxed text-white/70">{description}</p>
-      </CardContent>
+        <div className="ml-2">
+          <span className="inline-block rounded-full bg-cyan-700/80.5 text-xs uppercase tracking-wide text-cyan-100">
+            {chartType}
+          </span>
+        </div>
+      </CardHeader>
     </Card>
   );
 }
@@ -794,7 +795,15 @@ export default function UploadFile() {
               ? data.sheetName.trim()
               : null,
         });
-        setPreparedCharts(serverPreparedCharts);
+        // Prefer charts prepared by the server (AI-assisted). If the server
+        // did not return prepared charts, fall back to the client-side
+        // preview built from returned relationships so the canvas still
+        // renders meaningful suggestions.
+        if (serverPreparedCharts.charts.length) {
+          setPreparedCharts(serverPreparedCharts);
+        } else {
+          setPreparedCharts(fallbackPreview);
+        }
         setLatestDataset(
           data?.dataset?.id
             ? {
@@ -1028,11 +1037,7 @@ export default function UploadFile() {
                         : "none";
 
                       return (
-                        <RelationshipSummaryCard
-                          key={`${columnsKey}-${relationship?.chartType || "bar"}-${relationshipIndex}`}
-                          relationship={relationship}
-                          index={relationshipIndex}
-                        />
+                        <></>
                       );
                     })}
                   </div>
