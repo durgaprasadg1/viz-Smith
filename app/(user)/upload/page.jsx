@@ -1029,19 +1029,7 @@ export default function UploadFile() {
 
             {preparedCharts.charts.length ? (
               <div className="space-y-6">
-                {relationships.length ? (
-                  <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-                    {relationships.map((relationship, relationshipIndex) => {
-                      const columnsKey = Array.isArray(relationship?.columns)
-                        ? relationship.columns.join("-")
-                        : "none";
-
-                      return (
-                        <></>
-                      );
-                    })}
-                  </div>
-                ) : null}
+              
 
                 <div className="grid gap-6 lg:grid-cols-2">
                   {preparedCharts.charts.map((chart, index) => (
