@@ -135,13 +135,11 @@ async function downloadStoredDataset(storageClient, dataset) {
 
 export async function POST(req) {
   try {
-    const { errorResponse, supabase, user } = await getAuthorizedUserFromRequest(
-      req,
-      {
+    const { errorResponse, supabase, user } =
+      await getAuthorizedUserFromRequest(req, {
         missingTokenMessage: "Unauthorized",
         invalidTokenMessage: "Unauthorized",
-      },
-    );
+      });
 
     if (errorResponse) {
       return errorResponse;
@@ -281,13 +279,30 @@ export async function POST(req) {
           analysis.columns,
         );
 
-    const exportFile = await buildExportFile({
-      dataset,
-      format: normalizedFormat,
-      columns: analysis.columns,
-      rows: analysis.data,
-      charts: preparedCharts.charts,
-    });
+    let exportFile;
+    try {
+      exportFile = await buildExportFile({
+        dataset,
+        format: normalizedFormat,
+        columns: analysis.columns,
+        rows: analysis.data,
+        charts: preparedCharts.charts,
+      });
+    } catch (exportError) {
+      // If chart rendering fails (heavy binary libs or canvas issues),
+      // attempt a graceful fallback: export table only without charts.
+      try {
+        exportFile = await buildExportFile({
+          dataset,
+          format: normalizedFormat,
+          columns: analysis.columns,
+          rows: analysis.data,
+          charts: [],
+        });
+      } catch (fallbackError) {
+        throw exportError;
+      }
+    }
 
     const safeBaseName = String(dataset.file_name || "dataset")
       .replace(/\.[^/.]+$/, "")
