@@ -14,9 +14,11 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
-import { createSupabaseClient } from "@/lib/supabase";
+import { createSupabaseClient, providers } from "@/lib/supabase";
 import AnimatedCharts from "@/app/Components/AnimatedCharts";
 import { ChevronLeft } from "lucide-react";
+import { FcGoogle } from "react-icons/fc";
+import { FaGithub } from "react-icons/fa";
 
 const supabase = createSupabaseClient();
 
@@ -41,8 +43,12 @@ export default function SignupPage() {
 
     const { data: listener } = supabase.auth.onAuthStateChange(
       (_event, session) => {
-        if (session) {
-          router.replace("/dashboard");
+        if (session && isMounted) {
+          try {
+            router.replace("/dashboard");
+          } catch (err) {
+            console.warn("Router replace skipped:", err);
+          }
         }
       },
     );
@@ -117,14 +123,14 @@ export default function SignupPage() {
         <div className="absolute bottom-[-90px] left-[30%] h-[350px] w-[350px] rounded-full bg-[#F472B6]/10 blur-[140px]" />
       </div>
 
-      <button
-        type="button"
+      <Button
+        type="Button"
         onClick={() => router.back()}
         className="absolute left-6 top-6 z-30 rounded-full border border-white/15 bg-white/5 px-4 py-2 text-sm text-white/85 transition hover:bg-white/10 hover:text-white"
       >
-         <ChevronLeft className="mr-1 h-4 w-4" />
+        <ChevronLeft className="mr-1 h-4 w-4" />
         Back
-      </button>
+      </Button>
 
       <AnimatedCharts
         layout="signup"
@@ -198,6 +204,26 @@ export default function SignupPage() {
             >
               {loading ? "Creating account..." : "Sign Up"}
             </Button>
+
+            <div className=" space-y-3">
+              <Button
+                type="Button"
+                onClick={() => providers.signInWithGoogle()}
+                className="w-full flex items-center justify-center gap-3 rounded-xl border border-white/10 bg-white/5 px-4 py-2 text-sm font-medium text-white hover:bg-white/8"
+              >
+                <FcGoogle className="h-5 w-5" />
+                Continue with Google
+              </Button>
+
+              <Button
+                type="Button"
+                onClick={() => providers.signInWithGitHub()}
+                className="w-full flex items-center justify-center gap-3 rounded-xl border border-white/10 bg-white/5 px-4 py-2 text-sm font-medium text-white hover:bg-white/8"
+              >
+                <FaGithub className="h-5 w-5" />
+                Continue with GitHub
+              </Button>
+            </div>
           </form>
 
           <p className="mt-6 text-center text-sm text-white/70">

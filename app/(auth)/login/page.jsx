@@ -14,12 +14,12 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
-import { createSupabaseClient } from "@/lib/supabase";
+import { createSupabaseClient, providers } from "@/lib/supabase";
 import AnimatedCharts from "@/app/Components/AnimatedCharts";
-import { Left } from "@hugeicons/core-free-icons";
-import { Chevron } from "react-day-picker";
 import { ChevronLeft } from "lucide-react";
-import { providers } from "@/lib/supabase";
+import { FcGoogle } from "react-icons/fc";
+import { FaGithub } from "react-icons/fa";
+
 const supabase = createSupabaseClient();
 
 export default function LoginPage() {
@@ -42,8 +42,13 @@ export default function LoginPage() {
 
     const { data: listener } = supabase.auth.onAuthStateChange(
       (_event, session) => {
-        if (session) {
-          router.replace("/dashboard");
+        if (session && isMounted) {
+          try {
+            router.replace("/dashboard");
+          } catch (err) {
+            // router may not be ready yet in some Next.js boot paths
+            console.warn("Router replace skipped:", err);
+          }
         }
       },
     );
@@ -155,11 +160,27 @@ export default function LoginPage() {
             >
               {loading ? "Logging in..." : "Login"}
             </Button>
-            
           </form>
-          <Button onClick={providers.signInWithGoogle}>Continue with Google</Button>
-        <br />
-            <Button onClick={providers.signInWithGitHub}>Continue with GitHub</Button>
+
+          <div className="mt-4 space-y-3">
+            <button
+              type="button"
+              onClick={() => providers.signInWithGoogle()}
+              className="w-full flex items-center justify-center gap-3 rounded-xl border border-white/10 bg-white/5 px-4 py-2 text-sm font-medium text-white hover:bg-white/8"
+            >
+              <FcGoogle className="h-5 w-5" />
+              Continue with Google
+            </button>
+
+            <button
+              type="button"
+              onClick={() => providers.signInWithGitHub()}
+              className="w-full flex items-center justify-center gap-3 rounded-xl border border-white/10 bg-white/5 px-4 py-2 text-sm font-medium text-white hover:bg-white/8"
+            >
+              <FaGithub className="h-5 w-5" />
+              Continue with GitHub
+            </button>
+          </div>
 
           <p className="mt-6 text-center text-sm text-white/70">
             Don&apos;t have an account?{" "}

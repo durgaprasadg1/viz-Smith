@@ -21,13 +21,13 @@ import {
 
 export default function Navbar() {
   const supabase = createSupabaseClient();
-    const pathname = usePathname();
+  const pathname = usePathname();
   const { user } = useAuth();
+  const router = useRouter();
   const [logoutOpen, setLogoutOpen] = useState(false);
 
   const handleLogout = async () => {
     const { error } = await supabase.auth.signOut();
-    const router = useRouter();
     if (error) {
       console.error("Logout failed:", error.message);
       return;
@@ -38,10 +38,9 @@ export default function Navbar() {
     setLogoutOpen(false);
   };
 
-  if(pathname !== '/') return null
+  if (pathname !== "/") return null;
 
   return (
- 
     <header className="bg-transparent w-full flex items-center justify-between py-2 mb-5">
       <Link
         href="/"
