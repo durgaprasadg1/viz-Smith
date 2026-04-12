@@ -1,0 +1,14 @@
+{
+  "sessionId": "80f60510-dad2-457d-8f81-b2d25789f432",
+  "userId": "fd6ca4ea-a18e-4941-9bc3-b030b5220a09",
+  "fileKey": "stress_test_dataset_under49mb.csv:47164265:1775971775369",
+  "fileName": "stress_test_dataset_under49mb.csv",
+  "fileSize": 47164265,
+  "fileType": "text/csv",
+  "totalChunks": 9,
+  "chunkSize": 5242880,
+  "status": "uploading",
+  "createdAt": "2026-04-12T08:58:14.143Z",
+  "updatedAt": "2026-04-12T08:58:14.143Z",
+  "expiresAt": "2026-04-12T20:58:14.143Z"
+}

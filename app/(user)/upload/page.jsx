@@ -36,7 +36,9 @@ import {
 } from "recharts";
 
 const supabase = createSupabaseClient();
-const UPLOAD_REQUEST_TIMEOUT_MS = 30000;
+const CHUNK_SIZE_BYTES = 5 * 1024 * 1024;
+const STATUS_POLL_INTERVAL_MS = 2000;
+const STATUS_POLL_TIMEOUT_MS = 1000 * 60 * 10;
 
 const CHART_COLORS = [
   "#22D3EE",
@@ -142,6 +144,14 @@ function parseFilenameFromDisposition(disposition) {
 function extensionFromFormat(format) {
   if (format === "ppt") return "pptx";
   return "pdf";
+}
+
+function buildUploadFingerprint(file) {
+  return `${file.name}:${file.size}:${file.lastModified || 0}`;
+}
+
+function buildUploadResumeKey(userId, fingerprint) {
+  return `upload-session:${userId}:${fingerprint}`;
 }
 
 function toNumber(value) {
@@ -667,6 +677,7 @@ export default function UploadFile() {
   const [latestDataset, setLatestDataset] = useState(null);
   const [exportDialogOpen, setExportDialogOpen] = useState(false);
   const [exportingFormat, setExportingFormat] = useState("");
+  const [uploadProgressLabel, setUploadProgressLabel] = useState("");
 
   useEffect(() => {
     let isMounted = true;
@@ -711,6 +722,7 @@ export default function UploadFile() {
     setLatestDataset(null);
     setExportDialogOpen(false);
     setExportingFormat("");
+    setUploadProgressLabel("");
 
     if (!canUpload) {
       setMessage("Please sign in to upload files.");
@@ -730,138 +742,251 @@ export default function UploadFile() {
       return;
     }
 
+    const file = input.files[0];
+    const totalChunks = Math.max(1, Math.ceil(file.size / CHUNK_SIZE_BYTES));
+    const fileKey = buildUploadFingerprint(file);
+    const resumeKey = buildUploadResumeKey(user.id, fileKey);
+    const existingSessionId = localStorage.getItem(resumeKey);
     const loadingToast = toast.loading(
-      "Generating canvas from your dataset...",
+      "Uploading in chunks and preparing background analysis...",
     );
 
-    const formData = new FormData();
-    formData.append("file", input.files[0]);
-    const controller = new AbortController();
-    const timeout = setTimeout(() => {
-      controller.abort();
-    }, UPLOAD_REQUEST_TIMEOUT_MS);
-
     try {
-      const res = await fetch("/api/upload", {
+      setUploadProgressLabel("Initializing upload...");
+      const initResponse = await fetch("/api/upload/init", {
         method: "POST",
-        headers: accessToken
-          ? {
-              Authorization: `Bearer ${accessToken}`,
-            }
-          : {},
-        body: formData,
-        signal: controller.signal,
-      });
-      const data = await res.json().catch(() => ({}));
-
-      if (!res.ok) {
-        const errorMessage = data.error || "Upload failed";
-        setMessage(errorMessage);
-        toast.error(errorMessage, { id: loadingToast });
-      } else {
-        const nextRelationships = Array.isArray(data.relationships)
-          ? data.relationships
-          : [];
-        const nextColumns = Array.isArray(data.columns) ? data.columns : [];
-        const nextRows = Array.isArray(data.rows) ? data.rows : [];
-        const fallbackPreview = buildPreparedCharts(
-          nextRelationships,
-          nextRows,
-          nextColumns,
-        );
-        const hasServerPreparedCharts = Array.isArray(
-          data?.processedCharts?.charts,
-        );
-        const serverPreparedCharts = {
-          charts: hasServerPreparedCharts ? data.processedCharts.charts : [],
-          skipped: Number.isFinite(Number(data?.processedCharts?.skipped))
-            ? Number(data.processedCharts.skipped)
-            : 0,
-        };
-
-        setMessage("Upload successful");
-        setRelationships(nextRelationships);
-        setColumns(nextColumns);
-        setRows(nextRows);
-        setAnalysisSummary({
-          rowCount: Number.isFinite(Number(data?.rowCount))
-            ? Number(data.rowCount)
-            : nextRows.length,
-          columnCount: Number.isFinite(Number(data?.columnCount))
-            ? Number(data.columnCount)
-            : nextColumns.length,
-          sheetName:
-            typeof data?.sheetName === "string" && data.sheetName.trim()
-              ? data.sheetName.trim()
-              : null,
-        });
-        // Prefer charts prepared by the server (AI-assisted). If the server
-        // did not return prepared charts, fall back to the client-side
-        // preview built from returned relationships so the canvas still
-        // renders meaningful suggestions.
-        if (serverPreparedCharts.charts.length) {
-          setPreparedCharts(serverPreparedCharts);
-        } else {
-          setPreparedCharts(fallbackPreview);
-        }
-        setLatestDataset(
-          data?.dataset?.id
+        headers: {
+          "Content-Type": "application/json",
+          ...(accessToken
             ? {
-                id: data.dataset.id,
-                fileName:
-                  data?.dataset?.file_name ||
-                  data?.dataset?.fileName ||
-                  file.name,
+                Authorization: `Bearer ${accessToken}`,
               }
-            : null,
+            : {}),
+        },
+        body: JSON.stringify({
+          fileName: file.name,
+          fileType: file.type,
+          fileSize: file.size,
+          totalChunks,
+          chunkSize: CHUNK_SIZE_BYTES,
+          lastModified: file.lastModified || 0,
+          fileKey,
+          sessionId: existingSessionId || undefined,
+        }),
+      });
+      const initData = await initResponse.json().catch(() => ({}));
+
+      if (!initResponse.ok) {
+        throw new Error(initData.error || "Unable to initialize upload");
+      }
+
+      const sessionId = initData?.sessionId;
+      if (!sessionId) {
+        throw new Error("Upload session was not created");
+      }
+
+      localStorage.setItem(resumeKey, sessionId);
+
+      const uploadedChunkIndexes = new Set(
+        Array.isArray(initData.uploadedChunkIndexes)
+          ? initData.uploadedChunkIndexes
+          : [],
+      );
+
+      let uploadedCount = uploadedChunkIndexes.size;
+
+      for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex += 1) {
+        if (uploadedChunkIndexes.has(chunkIndex)) {
+          continue;
+        }
+
+        setUploadProgressLabel(
+          `Uploading chunk ${chunkIndex + 1}/${totalChunks}...`,
         );
-        form.reset();
 
-        if (!hasServerPreparedCharts && fallbackPreview.charts.length) {
-          toast.warning(
-            "Server response missed prepared charts, so rendering was skipped to avoid backend/frontend mismatch.",
-          );
+        const chunkStart = chunkIndex * CHUNK_SIZE_BYTES;
+        const chunkEnd = Math.min(file.size, chunkStart + CHUNK_SIZE_BYTES);
+        const chunkBlob = file.slice(chunkStart, chunkEnd);
+        const chunkFormData = new FormData();
+        chunkFormData.append("sessionId", sessionId);
+        chunkFormData.append("chunkIndex", String(chunkIndex));
+        chunkFormData.append("totalChunks", String(totalChunks));
+        chunkFormData.append("chunk", chunkBlob, `${file.name}.part.${chunkIndex}`);
+
+        const chunkResponse = await fetch("/api/upload/chunk", {
+          method: "POST",
+          headers: accessToken
+            ? {
+                Authorization: `Bearer ${accessToken}`,
+              }
+            : {},
+          body: chunkFormData,
+        });
+
+        const chunkData = await chunkResponse.json().catch(() => ({}));
+
+        if (!chunkResponse.ok) {
+          throw new Error(chunkData.error || "Chunk upload failed");
         }
 
-        if (data?.ai?.error) {
-          toast.warning(
-            "AI analysis did not complete in time, so fallback relationships were used.",
-          );
+        uploadedCount += 1;
+        const progress = Math.round((uploadedCount / totalChunks) * 100);
+        toast.loading(`Upload progress: ${progress}%`, { id: loadingToast });
+      }
+
+      setUploadProgressLabel("Scheduling background processing...");
+
+      const completeResponse = await fetch("/api/upload/complete", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(accessToken
+            ? {
+                Authorization: `Bearer ${accessToken}`,
+              }
+            : {}),
+        },
+        body: JSON.stringify({ sessionId }),
+      });
+
+      const completeData = await completeResponse.json().catch(() => ({}));
+
+      if (!completeResponse.ok) {
+        throw new Error(completeData.error || "Unable to finalize upload");
+      }
+
+      const datasetId = completeData?.dataset?.id;
+      if (!datasetId) {
+        throw new Error("Dataset processing did not start");
+      }
+
+      setLatestDataset({
+        id: datasetId,
+        fileName:
+          completeData?.dataset?.file_name || completeData?.dataset?.fileName || file.name,
+      });
+
+      const pollStart = Date.now();
+      let latestStatus = null;
+
+      while (Date.now() - pollStart < STATUS_POLL_TIMEOUT_MS) {
+        setUploadProgressLabel("Processing file in background...");
+
+        const statusResponse = await fetch(
+          `/api/upload/status?datasetId=${encodeURIComponent(datasetId)}`,
+          {
+            method: "GET",
+            headers: accessToken
+              ? {
+                  Authorization: `Bearer ${accessToken}`,
+                }
+              : {},
+          },
+        );
+        const statusData = await statusResponse.json().catch(() => ({}));
+
+        if (!statusResponse.ok) {
+          throw new Error(statusData.error || "Unable to fetch processing status");
         }
 
-        if (serverPreparedCharts.charts.length) {
-          toast.success(
-            `Canvas generated with ${serverPreparedCharts.charts.length} chart${serverPreparedCharts.charts.length > 1 ? "s" : ""}.`,
-            { id: loadingToast },
+        latestStatus = statusData;
+
+        if (statusData.status === "ready") {
+          const nextRelationships = Array.isArray(statusData.relationships)
+            ? statusData.relationships
+            : [];
+          const nextColumns = Array.isArray(statusData.columns)
+            ? statusData.columns
+            : [];
+          const nextRows = Array.isArray(statusData.rows) ? statusData.rows : [];
+          const fallbackPreview = buildPreparedCharts(
+            nextRelationships,
+            nextRows,
+            nextColumns,
           );
-          if (serverPreparedCharts.skipped > 0) {
+          const hasServerPreparedCharts = Array.isArray(
+            statusData?.processedCharts?.charts,
+          );
+          const serverPreparedCharts = {
+            charts: hasServerPreparedCharts ? statusData.processedCharts.charts : [],
+            skipped: Number.isFinite(Number(statusData?.processedCharts?.skipped))
+              ? Number(statusData.processedCharts.skipped)
+              : 0,
+          };
+
+          setMessage("Upload successful");
+          setRelationships(nextRelationships);
+          setColumns(nextColumns);
+          setRows(nextRows);
+          setAnalysisSummary({
+            rowCount: Number.isFinite(Number(statusData?.rowCount))
+              ? Number(statusData.rowCount)
+              : nextRows.length,
+            columnCount: Number.isFinite(Number(statusData?.columnCount))
+              ? Number(statusData.columnCount)
+              : nextColumns.length,
+            sheetName:
+              typeof statusData?.sheetName === "string" && statusData.sheetName.trim()
+                ? statusData.sheetName.trim()
+                : null,
+          });
+
+          if (serverPreparedCharts.charts.length) {
+            setPreparedCharts(serverPreparedCharts);
+          } else {
+            setPreparedCharts(fallbackPreview);
+          }
+
+          form.reset();
+          localStorage.removeItem(resumeKey);
+          setUploadProgressLabel("");
+
+          if (statusData?.ai?.error) {
             toast.warning(
-              `${serverPreparedCharts.skipped} chart suggestion${serverPreparedCharts.skipped > 1 ? "s were" : " was"} skipped due to empty or incompatible columns.`,
+              "AI analysis did not complete in time, so fallback relationships were used.",
             );
           }
-        } else {
-          toast.error("No renderable charts were generated for this file.", {
-            id: loadingToast,
-          });
+
+          if (serverPreparedCharts.charts.length) {
+            toast.success(
+              `Canvas generated with ${serverPreparedCharts.charts.length} chart${serverPreparedCharts.charts.length > 1 ? "s" : ""}.`,
+              { id: loadingToast },
+            );
+            if (serverPreparedCharts.skipped > 0) {
+              toast.warning(
+                `${serverPreparedCharts.skipped} chart suggestion${serverPreparedCharts.skipped > 1 ? "s were" : " was"} skipped due to empty or incompatible columns.`,
+              );
+            }
+          } else {
+            toast.error("No renderable charts were generated for this file.", {
+              id: loadingToast,
+            });
+          }
+
+          return;
         }
 
-        if (data?.persistence?.warning) {
-          toast.warning(
-            `Charts generated, but dataset save failed: ${data.persistence.warning}`,
-          );
+        if (statusData.status === "failed") {
+          localStorage.removeItem(resumeKey);
+          throw new Error(statusData.error || "Dataset processing failed");
         }
+
+        await new Promise((resolve) =>
+          setTimeout(resolve, STATUS_POLL_INTERVAL_MS),
+        );
       }
+
+      throw new Error(
+        latestStatus?.status === "processing"
+          ? "Upload completed, but processing is taking longer than expected. Please check dashboard status shortly."
+          : "Upload processing timed out",
+      );
     } catch (error) {
-      const errorMessage =
-        error?.name === "AbortError"
-          ? "Upload took too long. Analysis was stopped before the server responded."
-          : "Something went wrong";
+      const errorMessage = error?.message || "Something went wrong";
       setMessage(errorMessage);
-      toast.error("Something went wrong while generating charts.", {
-        id: loadingToast,
-      });
+      toast.error(errorMessage, { id: loadingToast });
     } finally {
-      clearTimeout(timeout);
+      setUploadProgressLabel("");
       setLoading(false);
     }
   }
@@ -960,7 +1085,7 @@ export default function UploadFile() {
                 className="bg-white/5 border-white/10 text-white file:text-white file:bg-white/10 file:border-0 file:rounded file:px-3 file:py-1"
               />
               <p className="text-xs text-white/60">
-                Supported: .csv, .xlsx. Max size: 50MB.
+                Supported: .csv, .xlsx, .csv.gz. Max size: 50MB.
               </p>
             </div>
 
@@ -969,7 +1094,9 @@ export default function UploadFile() {
               disabled={loading || !canUpload}
               className="w-full bg-gradient-to-r from-[#22D3EE] via-[#8B5CF6] to-[#F472B6] text-slate-950 font-semibold hover:opacity-90"
             >
-              {loading ? "Uploading..." : "Upload File"}
+              {loading
+                ? uploadProgressLabel || "Uploading..."
+                : "Upload File"}
             </Button>
 
             <Button

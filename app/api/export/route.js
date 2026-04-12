@@ -265,6 +265,7 @@ export async function POST(req) {
       fileSize: dataset.file_size,
       existingRelationships: dataset.metadata?.relationships,
       skipAi: true,
+      includeFullData: true,
     });
 
     const persistedProcessedCharts = dataset?.metadata?.processedCharts;
