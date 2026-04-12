@@ -6,8 +6,15 @@ import {
   ALLOWED_TYPES,
   MAX_FILE_SIZE,
   analyzeDatasetBuffer,
+  streamDatasetRows,
 } from "@/lib/dataset-analysis";
+import { parseDatasetBuffer } from "@/lib/dataset-analysis";
+import {
+  convertRowsToArrowStreamBuffer,
+  convertRowsToArrowBuffer,
+} from "@/lib/arrow-conversion";
 import { invalidateUserDatasetCaches } from "@/lib/redis-cache";
+import { uploadQueue } from "@/lib/queue";
 
 const SUPPORTED_EXTENSIONS = [".csv", ".xlsx"];
 const STORAGE_BUCKET = "user-uploads";
@@ -57,13 +64,11 @@ function buildStoragePath(userId, fileName) {
 
 export async function POST(req) {
   try {
-    const { errorResponse, supabase, user } = await getAuthorizedUserFromRequest(
-      req,
-      {
+    const { errorResponse, supabase, user } =
+      await getAuthorizedUserFromRequest(req, {
         missingTokenMessage: "Please sign in before uploading a dataset.",
         invalidTokenMessage: "Unauthorized",
-      },
-    );
+      });
 
     if (errorResponse) {
       return errorResponse;
@@ -71,9 +76,66 @@ export async function POST(req) {
 
     const formData = await req.formData();
     const file = formData.get("file");
+    const uploadId = formData.get("uploadId");
+    const chunkIndexRaw = formData.get("chunkIndex");
+    const totalChunksRaw = formData.get("totalChunks");
 
     if (!file) {
       return NextResponse.json({ error: "No file uploaded" }, { status: 400 });
+    }
+
+    // Helper: upload an individual chunk to Supabase storage under a temp folder
+    async function uploadChunkToStorage(uploadIdValue, index, buf) {
+      const chunkPath = `${user.id}/uploads/${String(uploadIdValue)}/chunks/${String(index).padStart(6, "0")}`;
+      const { error: chunkErr } = await supabase.storage
+        .from(STORAGE_BUCKET)
+        .upload(chunkPath, buf, {
+          contentType: "application/octet-stream",
+          upsert: true,
+        });
+      if (chunkErr) throw new Error(chunkErr.message || "Chunk upload failed");
+      return chunkPath;
+    }
+
+    // Helper: assemble all chunks (0..totalChunks-1) into a single Buffer
+    async function assembleChunksToBuffer(uploadIdValue, totalChunks) {
+      const parts = [];
+      for (let i = 0; i < totalChunks; i += 1) {
+        const chunkPath = `${user.id}/uploads/${String(uploadIdValue)}/chunks/${String(i).padStart(6, "0")}`;
+        const { data: chunkData, error: downloadErr } = await supabase.storage
+          .from(STORAGE_BUCKET)
+          .download(chunkPath);
+        if (downloadErr || !chunkData) {
+          throw new Error(`Missing chunk ${i}`);
+        }
+
+        // chunkData is a ReadableStream/Blob in some runtimes; convert to Buffer
+        let buf;
+        try {
+          const arrayBuffer = await chunkData.arrayBuffer();
+          buf = Buffer.from(arrayBuffer);
+        } catch (e) {
+          // node-fetch style
+          buf = Buffer.from(await chunkData.arrayBuffer());
+        }
+        parts.push(buf);
+      }
+      return Buffer.concat(parts);
+    }
+
+    // Helper: remove chunk files
+    async function removeChunkFiles(uploadIdValue, totalChunks) {
+      const paths = [];
+      for (let i = 0; i < totalChunks; i += 1) {
+        paths.push(
+          `${user.id}/uploads/${String(uploadIdValue)}/chunks/${String(i).padStart(6, "0")}`,
+        );
+      }
+      try {
+        await supabase.storage.from(STORAGE_BUCKET).remove(paths);
+      } catch (e) {
+        // ignore cleanup errors
+      }
     }
 
     if (!hasSupportedExtension(file.name)) {
@@ -97,49 +159,77 @@ export async function POST(req) {
       );
     }
 
-    const buffer = Buffer.from(await file.arrayBuffer());
-
-    let analysis;
-    try {
-      analysis = await analyzeDatasetBuffer({
-        buffer,
-        fileName: file.name,
-        fileSize: file.size,
-      });
-    } catch (analysisError) {
-      return NextResponse.json(
-        { error: analysisError?.message || "Unable to parse dataset" },
-        { status: 400 },
-      );
-    }
-
-    const {
-      rowCount,
-      columnCount,
-      sheetName,
-      columns,
-      columnProfiles,
-      relationships,
-      previewRows,
-      aiResult,
-    } = analysis;
-
-    if (!columnCount) {
-      return NextResponse.json(
-        {
-          error:
-            "No valid columns found for analysis. Please check your file headers.",
-        },
-        { status: 400 },
-      );
-    }
-
-    const processedCharts = buildPreparedCharts(
-      relationships,
-      previewRows,
-      columns,
+    // If this is a chunked upload, store the chunk and assemble when final chunk arrives.
+    const isChunked = Boolean(
+      uploadId && chunkIndexRaw !== null && chunkIndexRaw !== undefined,
     );
 
+    let buffer = Buffer.from(await file.arrayBuffer());
+
+    if (isChunked) {
+      const chunkIndex = Number(chunkIndexRaw);
+      const totalChunks = totalChunksRaw ? Number(totalChunksRaw) : null;
+      if (Number.isNaN(chunkIndex) || chunkIndex < 0) {
+        return NextResponse.json(
+          { error: "Invalid chunkIndex" },
+          { status: 400 },
+        );
+      }
+
+      try {
+        await uploadChunkToStorage(uploadId, chunkIndex, buffer);
+      } catch (e) {
+        return NextResponse.json(
+          { error: e?.message || "Chunk upload failed" },
+          { status: 500 },
+        );
+      }
+
+      // If we know totalChunks and this is the last chunk, assemble and continue
+      const isLast = totalChunks !== null && chunkIndex === totalChunks - 1;
+      if (!isLast) {
+        // return early acknowledging chunk upload
+        return NextResponse.json(
+          { success: true, chunkUploaded: true, index: chunkIndex },
+          { status: 200 },
+        );
+      }
+
+      // Assemble chunks into buffer for downstream processing
+      try {
+        buffer = await assembleChunksToBuffer(uploadId, totalChunks);
+        // cleanup chunk files (best-effort)
+        removeChunkFiles(uploadId, totalChunks).catch(() => undefined);
+      } catch (e) {
+        return NextResponse.json(
+          { error: e?.message || "Chunk assembly failed" },
+          { status: 500 },
+        );
+      }
+      // For assembled uploads, set file.size to assembled size and proceed
+      file.size = buffer.length;
+    }
+
+    // Light-weight parse to collect preview/sample rows and columns for UI feedback.
+    let parsedSummary = null;
+    try {
+      parsedSummary = await parseDatasetBuffer({
+        buffer,
+        fileName: file.name,
+        includeFullData: false,
+      });
+    } catch (err) {
+      // parsing failed - still allow upload but mark dataset processing failed
+      parsedSummary = null;
+    }
+
+    const rowCount = parsedSummary?.rowCount ?? null;
+    const columnCount = parsedSummary?.columnCount ?? 0;
+    const sheetName = parsedSummary?.sheetName ?? null;
+    const columns = parsedSummary?.columns ?? [];
+    const previewRows = parsedSummary?.previewRows ?? [];
+
+    // Build storage path and upload original file now (before background processing)
     const storagePath = buildStoragePath(user.id, file.name);
     const contentType = getFileContentType(file.name, file.type);
 
@@ -157,42 +247,24 @@ export async function POST(req) {
       );
     }
 
-    const insertPayload = {
-      user_id: user.id,
-      file_name: sanitizeFileName(file.name),
-      storage_bucket: STORAGE_BUCKET,
-      storage_path: storagePath,
-      file_type: contentType,
-      file_size: file.size,
-      row_count: rowCount,
-      column_count: columnCount,
-      xlsx_sheet_name: sheetName,
-      status: "ready",
-      metadata: {
-        columns,
-        columnProfiles,
-        relationships,
-        processedCharts,
-        ai: {
-          provider: aiResult?.provider || null,
-          model: aiResult?.model || null,
-          error: aiResult?.error || null,
-        },
-      },
-    };
-
-    const { data: dataset, error: insertError } = await supabase
-      .from("datasets")
-      .insert(insertPayload)
-      .select(
-        "id, file_name, status, uploaded_at, storage_bucket, storage_path, row_count, column_count",
-      )
-      .single();
-
-    if (insertError) {
-      await supabase.storage.from(STORAGE_BUCKET).remove([storagePath]);
+    // Enqueue background job to assemble/process/convert (dataset already created above)
+    try {
+      await uploadQueue.add("process-upload", {
+        userId: user.id,
+        storagePath,
+        fileName: file.name,
+        fileSize: file.size,
+        uploadId: uploadId || null,
+        totalChunks: totalChunksRaw ? Number(totalChunksRaw) : null,
+        datasetId: dataset.id,
+      });
+    } catch (qerr) {
+      await supabase
+        .from("datasets")
+        .update({ status: "failed" })
+        .eq("id", dataset.id);
       return NextResponse.json(
-        { error: insertError.message || "Unable to save dataset metadata" },
+        { error: qerr?.message || "Unable to enqueue processing job" },
         { status: 500 },
       );
     }
@@ -203,24 +275,9 @@ export async function POST(req) {
 
     return NextResponse.json({
       success: true,
-      relationships,
-      columns,
-      rowCount,
-      columnCount,
-      sheetName,
-      rows: previewRows,
-      processedCharts,
       dataset,
-      persistence: {
-        saved: true,
-        warning: null,
-      },
-      ai: {
-        provider:
-          aiResult?.provider || (process.env.GROK_API_KEY ? "grok" : null),
-        model: aiResult?.model || process.env.GROK_MODEL || null,
-        error: aiResult?.error || null,
-      },
+      rows: previewRows,
+      message: "Upload saved and processing queued",
     });
   } catch (error) {
     return NextResponse.json(

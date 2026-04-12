@@ -100,6 +100,12 @@ create index idx_datasets_user_id on datasets(user_id);
 create index idx_datasets_status on datasets(status);
 create index idx_datasets_expires_at on datasets(expires_at);
 
+-- Additional recommended indexes for common access patterns
+create index if not exists idx_datasets_user_created_at on datasets(user_id, created_at desc);
+create index if not exists idx_datasets_user_status_created_at on datasets(user_id, status, created_at desc);
+create index if not exists idx_datasets_file_name_lower on datasets ((lower(file_name)));
+create index if not exists idx_datasets_metadata_gin on datasets using gin (metadata);
+
 create trigger trg_datasets_updated_at
 before update on datasets
 for each row execute function set_updated_at();
