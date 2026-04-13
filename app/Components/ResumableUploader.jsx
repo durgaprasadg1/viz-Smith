@@ -13,7 +13,8 @@ export default function ResumableUploader({ onComplete } = {}) {
   const [status, setStatus] = useState("idle");
   const inputRef = useRef(null);
 
-  const CHUNK_SIZE = 5 * 1024 * 1024; // 5MB
+  // Use smaller chunks to avoid server "Payload Too Large" (413)
+  const CHUNK_SIZE = 1 * 1024 * 1024; // 1MB
   const CONCURRENCY = 3; // number of parallel chunk uploads (adjust as needed)
 
   function makeUploadId() {

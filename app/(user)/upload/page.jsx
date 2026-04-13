@@ -36,7 +36,8 @@ import {
 } from "recharts";
 
 const supabase = createSupabaseClient();
-const CHUNK_SIZE_BYTES = 5 * 1024 * 1024;
+// Keep chunks well below Vercel's 4.5MB function payload limit.
+const CHUNK_SIZE_BYTES = 1 * 1024 * 1024;
 const STATUS_POLL_INTERVAL_MS = 2000;
 const STATUS_POLL_TIMEOUT_MS = 1000 * 60 * 10;
 
@@ -161,6 +162,8 @@ const UPLOAD_ERROR_CODE_MESSAGES = {
     "Only CSV, CSV.GZ, and XLSX files are supported.",
   UPLOAD_INVALID_FILE_TYPE: "Only CSV, CSV.GZ, and XLSX files are supported.",
   UPLOAD_FILE_TOO_LARGE: "File size must be less than 50MB.",
+  UPLOAD_CHUNK_TOO_LARGE:
+    "Upload chunk is too large for the server. Refresh and retry.",
   UPLOAD_INVALID_CHUNK_DATA:
     "Upload metadata is invalid. Please retry the upload.",
   UPLOAD_SESSION_NOT_FOUND:
@@ -222,6 +225,10 @@ function formatUploadErrorMessage({
 }) {
   if (status === 401) {
     return "Your session expired. Please sign in and try again.";
+  }
+
+  if (status === 413) {
+    return "Chunk payload is too large for the server. Please refresh and retry upload.";
   }
 
   if (status === 404 && stage === "init") {
@@ -859,6 +866,15 @@ export default function UploadFile() {
     const fileKey = buildUploadFingerprint(file);
     const resumeKey = buildUploadResumeKey(user.id, fileKey);
     const existingSessionId = localStorage.getItem(resumeKey);
+    const authHeaders = accessToken
+      ? {
+          Authorization: `Bearer ${accessToken}`,
+        }
+      : {};
+    const jsonAuthHeaders = {
+      "Content-Type": "application/json",
+      ...authHeaders,
+    };
     const loadingToast = toast.loading(
       "Uploading in chunks and preparing background analysis...",
     );
@@ -867,14 +883,7 @@ export default function UploadFile() {
       setUploadProgressLabel("Initializing upload...");
       const initResponse = await fetch("/api/upload/init", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...(accessToken
-            ? {
-                Authorization: `Bearer ${accessToken}`,
-              }
-            : {}),
-        },
+        headers: jsonAuthHeaders,
         body: JSON.stringify({
           fileName: file.name,
           fileType: file.type,
@@ -939,11 +948,7 @@ export default function UploadFile() {
 
         const chunkResponse = await fetch("/api/upload/chunk", {
           method: "POST",
-          headers: accessToken
-            ? {
-                Authorization: `Bearer ${accessToken}`,
-              }
-            : {},
+          headers: authHeaders,
           body: chunkFormData,
         });
 
@@ -968,14 +973,7 @@ export default function UploadFile() {
 
       const completeResponse = await fetch("/api/upload/complete", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...(accessToken
-            ? {
-                Authorization: `Bearer ${accessToken}`,
-              }
-            : {}),
-        },
+        headers: jsonAuthHeaders,
         body: JSON.stringify({ sessionId }),
       });
 
@@ -1014,11 +1012,7 @@ export default function UploadFile() {
           `/api/upload/status?datasetId=${encodeURIComponent(datasetId)}`,
           {
             method: "GET",
-            headers: accessToken
-              ? {
-                  Authorization: `Bearer ${accessToken}`,
-                }
-              : {},
+            headers: authHeaders,
           },
         );
         const statusData = await statusResponse.json().catch(() => ({}));
@@ -1255,7 +1249,7 @@ export default function UploadFile() {
               <Input
                 type="file"
                 name="file"
-                accept=".csv,.xlsx"
+                accept=".csv,.xlsx,.csv.gz"
                 className="bg-white/5 border-white/10 text-white file:text-white file:bg-white/10 file:border-0 file:rounded file:px-3 file:py-1"
               />
               <p className="text-xs text-white/60">

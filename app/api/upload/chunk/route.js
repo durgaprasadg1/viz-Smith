@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 
 import { getAuthorizedUserFromRequest } from "@/lib/api-route-auth";
 import { classifyUploadError } from "@/lib/upload-errors";
-import { saveUploadChunk } from "@/lib/upload-optimization";
+import { CHUNK_SIZE_BYTES, saveUploadChunk } from "@/lib/upload-optimization";
 
 export const runtime = "nodejs";
 
@@ -33,6 +33,22 @@ export async function POST(req) {
       );
     }
 
+    if (
+      !Number.isInteger(chunkIndex) ||
+      !Number.isInteger(totalChunks) ||
+      chunkIndex < 0 ||
+      totalChunks <= 0 ||
+      chunkIndex >= totalChunks
+    ) {
+      return NextResponse.json(
+        {
+          error: "Invalid chunk metadata",
+          code: "UPLOAD_INVALID_CHUNK_DATA",
+        },
+        { status: 400 },
+      );
+    }
+
     if (!chunk || typeof chunk?.arrayBuffer !== "function") {
       return NextResponse.json(
         {
@@ -40,6 +56,16 @@ export async function POST(req) {
           code: "UPLOAD_CHUNK_REQUIRED",
         },
         { status: 400 },
+      );
+    }
+
+    if (Number(chunk.size || 0) > CHUNK_SIZE_BYTES) {
+      return NextResponse.json(
+        {
+          error: "Chunk size exceeds server limit",
+          code: "UPLOAD_CHUNK_TOO_LARGE",
+        },
+        { status: 413 },
       );
     }
 

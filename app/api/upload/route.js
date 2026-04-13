@@ -1,18 +1,12 @@
 ﻿import { NextResponse } from "next/server";
 
 import { getAuthorizedUserFromRequest } from "@/lib/api-route-auth";
-import { buildPreparedCharts } from "@/lib/chart-preparation";
 import {
   ALLOWED_TYPES,
   MAX_FILE_SIZE,
   analyzeDatasetBuffer,
-  streamDatasetRows,
 } from "@/lib/dataset-analysis";
 import { parseDatasetBuffer } from "@/lib/dataset-analysis";
-import {
-  convertRowsToArrowStreamBuffer,
-  convertRowsToArrowBuffer,
-} from "@/lib/arrow-conversion";
 import { invalidateUserDatasetCaches } from "@/lib/redis-cache";
 import { uploadQueue } from "@/lib/queue";
 
@@ -247,7 +241,8 @@ export async function POST(req) {
       );
     }
 
-    // Enqueue background job to assemble/process/convert (dataset already created above)
+    // Enqueue background job to assemble/process/convert. Do NOT assume a
+    // dataset row exists here; worker will create or update the dataset row.
     try {
       await uploadQueue.add("process-upload", {
         userId: user.id,
@@ -256,13 +251,8 @@ export async function POST(req) {
         fileSize: file.size,
         uploadId: uploadId || null,
         totalChunks: totalChunksRaw ? Number(totalChunksRaw) : null,
-        datasetId: dataset.id,
       });
     } catch (qerr) {
-      await supabase
-        .from("datasets")
-        .update({ status: "failed" })
-        .eq("id", dataset.id);
       return NextResponse.json(
         { error: qerr?.message || "Unable to enqueue processing job" },
         { status: 500 },
