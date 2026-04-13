@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { getAuthorizedUserFromRequest } from "@/lib/api-route-auth";
+import { classifyUploadError } from "@/lib/upload-errors";
 import {
   CHUNK_SIZE_BYTES,
   createOrResumeUploadSession,
@@ -33,24 +34,27 @@ export async function POST(req) {
         ? body.fileKey.trim()
         : null;
 
-    const fileKey = clientFileKey ||
+    const fileKey =
+      clientFileKey ||
       getFileKey({
         fileName,
         fileSize,
         lastModified,
       });
 
-    const { session, uploadedChunkIndexes } = await createOrResumeUploadSession({
-      userId: user.id,
-      fileName,
-      fileSize,
-      fileType,
-      totalChunks,
-      chunkSize,
-      fileKey,
-      existingSessionId:
-        typeof body?.sessionId === "string" ? body.sessionId : null,
-    });
+    const { session, uploadedChunkIndexes } = await createOrResumeUploadSession(
+      {
+        userId: user.id,
+        fileName,
+        fileSize,
+        fileType,
+        totalChunks,
+        chunkSize,
+        fileKey,
+        existingSessionId:
+          typeof body?.sessionId === "string" ? body.sessionId : null,
+      },
+    );
 
     return NextResponse.json({
       success: true,
@@ -61,9 +65,25 @@ export async function POST(req) {
       uploadedChunkIndexes,
     });
   } catch (error) {
+    const normalizedError = classifyUploadError(error, {
+      defaultStatus: 500,
+      defaultCode: "UPLOAD_INIT_FAILED",
+      defaultMessage:
+        "Unable to initialize upload session right now. Please try again.",
+    });
+
+    if (normalizedError.status >= 500) {
+      console.error("[upload/init]", normalizedError.code, {
+        message: normalizedError.debugMessage,
+      });
+    }
+
     return NextResponse.json(
-      { error: error?.message || "Unable to initialize upload session" },
-      { status: 400 },
+      {
+        error: normalizedError.message,
+        code: normalizedError.code,
+      },
+      { status: normalizedError.status },
     );
   }
 }

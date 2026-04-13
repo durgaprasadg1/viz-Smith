@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { getAuthorizedUserFromRequest } from "@/lib/api-route-auth";
+import { classifyUploadError } from "@/lib/upload-errors";
 import { saveUploadChunk } from "@/lib/upload-optimization";
 
 export const runtime = "nodejs";
@@ -23,11 +24,23 @@ export async function POST(req) {
     const chunk = formData.get("chunk");
 
     if (!sessionId) {
-      return NextResponse.json({ error: "Missing session id" }, { status: 400 });
+      return NextResponse.json(
+        {
+          error: "Missing session id",
+          code: "UPLOAD_SESSION_ID_REQUIRED",
+        },
+        { status: 400 },
+      );
     }
 
     if (!chunk || typeof chunk?.arrayBuffer !== "function") {
-      return NextResponse.json({ error: "Missing upload chunk" }, { status: 400 });
+      return NextResponse.json(
+        {
+          error: "Missing upload chunk",
+          code: "UPLOAD_CHUNK_REQUIRED",
+        },
+        { status: 400 },
+      );
     }
 
     const chunkBuffer = Buffer.from(await chunk.arrayBuffer());
@@ -46,9 +59,24 @@ export async function POST(req) {
       chunkIndex,
     });
   } catch (error) {
+    const normalizedError = classifyUploadError(error, {
+      defaultStatus: 500,
+      defaultCode: "UPLOAD_CHUNK_FAILED",
+      defaultMessage: "Unable to upload chunk right now. Please retry.",
+    });
+
+    if (normalizedError.status >= 500) {
+      console.error("[upload/chunk]", normalizedError.code, {
+        message: normalizedError.debugMessage,
+      });
+    }
+
     return NextResponse.json(
-      { error: error?.message || "Unable to upload chunk" },
-      { status: 400 },
+      {
+        error: normalizedError.message,
+        code: normalizedError.code,
+      },
+      { status: normalizedError.status },
     );
   }
 }

@@ -154,6 +154,118 @@ function buildUploadResumeKey(userId, fingerprint) {
   return `upload-session:${userId}:${fingerprint}`;
 }
 
+const UPLOAD_ERROR_CODE_MESSAGES = {
+  UPLOAD_TEMP_STORAGE_UNAVAILABLE:
+    "Upload storage is temporarily unavailable. Please retry in a few moments.",
+  UPLOAD_UNSUPPORTED_EXTENSION:
+    "Only CSV, CSV.GZ, and XLSX files are supported.",
+  UPLOAD_INVALID_FILE_TYPE: "Only CSV, CSV.GZ, and XLSX files are supported.",
+  UPLOAD_FILE_TOO_LARGE: "File size must be less than 50MB.",
+  UPLOAD_INVALID_CHUNK_DATA:
+    "Upload metadata is invalid. Please retry the upload.",
+  UPLOAD_SESSION_NOT_FOUND:
+    "Upload session was not found. Please restart the upload.",
+  UPLOAD_SESSION_NOT_READY:
+    "Upload session is no longer available. Please upload again.",
+  UPLOAD_SESSION_CLOSED: "Upload session is closed. Please restart the upload.",
+  UPLOAD_SESSION_EXPIRED: "Upload session expired. Please restart the upload.",
+  UPLOAD_INCOMPLETE:
+    "Upload is incomplete. Please retry and ensure all chunks finish.",
+  UPLOAD_DATASET_INIT_FAILED:
+    "Upload finished, but processing could not start. Please try again.",
+  UPLOAD_STORAGE_WRITE_FAILED:
+    "Uploaded data could not be stored. Please try again.",
+  UPLOAD_PROCESSING_FAILED:
+    "Dataset processing failed. Please retry upload with a clean file.",
+};
+
+const RESUMABLE_SESSION_ERROR_CODES = new Set([
+  "UPLOAD_SESSION_NOT_FOUND",
+  "UPLOAD_SESSION_NOT_READY",
+  "UPLOAD_SESSION_CLOSED",
+  "UPLOAD_SESSION_EXPIRED",
+  "UPLOAD_SESSION_ID_REQUIRED",
+]);
+
+function parseUploadApiError(payload) {
+  if (!payload || typeof payload !== "object") {
+    return {
+      code: null,
+      message: null,
+    };
+  }
+
+  const code =
+    typeof payload.code === "string" && payload.code.trim()
+      ? payload.code.trim()
+      : null;
+
+  const message =
+    typeof payload.error === "string" && payload.error.trim()
+      ? payload.error.trim()
+      : typeof payload.message === "string" && payload.message.trim()
+        ? payload.message.trim()
+        : null;
+
+  return {
+    code,
+    message,
+  };
+}
+
+function formatUploadErrorMessage({
+  stage,
+  status,
+  code,
+  apiMessage,
+  fallbackMessage,
+}) {
+  if (status === 401) {
+    return "Your session expired. Please sign in and try again.";
+  }
+
+  if (status === 404 && stage === "init") {
+    return "Upload API is unavailable right now. Refresh and try again.";
+  }
+
+  if (code && UPLOAD_ERROR_CODE_MESSAGES[code]) {
+    return UPLOAD_ERROR_CODE_MESSAGES[code];
+  }
+
+  if (
+    typeof apiMessage === "string" &&
+    apiMessage &&
+    status < 500 &&
+    !/enoent|eacces|erofs|\/var\/task/i.test(apiMessage)
+  ) {
+    return apiMessage;
+  }
+
+  if (stage === "status") {
+    return "Upload completed, but status tracking is temporarily unavailable. Check dashboard shortly.";
+  }
+
+  return fallbackMessage;
+}
+
+function createUploadRequestError({ stage, status, payload, fallbackMessage }) {
+  const { code, message } = parseUploadApiError(payload);
+  const error = new Error(
+    formatUploadErrorMessage({
+      stage,
+      status,
+      code,
+      apiMessage: message,
+      fallbackMessage,
+    }),
+  );
+
+  error.code = code;
+  error.status = status;
+  error.apiMessage = message;
+  return error;
+}
+
 function toNumber(value) {
   if (value === null || value === undefined || value === "") return null;
   if (typeof value === "number") return Number.isFinite(value) ? value : null;
@@ -777,24 +889,20 @@ export default function UploadFile() {
       const initData = await initResponse.json().catch(() => ({}));
 
       if (!initResponse.ok) {
-        if (initResponse.status === 404) {
-          throw new Error(
-            "Upload init API route not found. Restart the Next server and try again.",
-          );
-        }
-
-        if (initResponse.status === 401) {
-          throw new Error(
-            initData.error || "Session expired. Please sign in again.",
-          );
-        }
-
-        throw new Error(initData.error || "Unable to initialize upload");
+        throw createUploadRequestError({
+          stage: "init",
+          status: initResponse.status,
+          payload: initData,
+          fallbackMessage:
+            "Unable to initialize upload session right now. Please try again.",
+        });
       }
 
       const sessionId = initData?.sessionId;
       if (!sessionId) {
-        throw new Error("Upload session was not created");
+        throw new Error(
+          "Upload session could not be created. Please retry the upload.",
+        );
       }
 
       localStorage.setItem(resumeKey, sessionId);
@@ -842,7 +950,13 @@ export default function UploadFile() {
         const chunkData = await chunkResponse.json().catch(() => ({}));
 
         if (!chunkResponse.ok) {
-          throw new Error(chunkData.error || "Chunk upload failed");
+          throw createUploadRequestError({
+            stage: "chunk",
+            status: chunkResponse.status,
+            payload: chunkData,
+            fallbackMessage:
+              "Unable to upload one of the chunks. Please retry the upload.",
+          });
         }
 
         uploadedCount += 1;
@@ -868,7 +982,13 @@ export default function UploadFile() {
       const completeData = await completeResponse.json().catch(() => ({}));
 
       if (!completeResponse.ok) {
-        throw new Error(completeData.error || "Unable to finalize upload");
+        throw createUploadRequestError({
+          stage: "complete",
+          status: completeResponse.status,
+          payload: completeData,
+          fallbackMessage:
+            "Upload completed, but finalization failed. Please try again.",
+        });
       }
 
       const datasetId = completeData?.dataset?.id;
@@ -904,9 +1024,13 @@ export default function UploadFile() {
         const statusData = await statusResponse.json().catch(() => ({}));
 
         if (!statusResponse.ok) {
-          throw new Error(
-            statusData.error || "Unable to fetch processing status",
-          );
+          throw createUploadRequestError({
+            stage: "status",
+            status: statusResponse.status,
+            payload: statusData,
+            fallbackMessage:
+              "Unable to fetch processing status right now. Please check dashboard shortly.",
+          });
         }
 
         latestStatus = statusData;
@@ -995,7 +1119,16 @@ export default function UploadFile() {
 
         if (statusData.status === "failed") {
           localStorage.removeItem(resumeKey);
-          throw new Error(statusData.error || "Dataset processing failed");
+          throw createUploadRequestError({
+            stage: "processing",
+            status: 422,
+            payload: {
+              code: "UPLOAD_PROCESSING_FAILED",
+              error: statusData.error,
+            },
+            fallbackMessage:
+              "Dataset processing failed. Please retry upload with a clean file.",
+          });
         }
 
         await new Promise((resolve) =>
@@ -1009,9 +1142,23 @@ export default function UploadFile() {
           : "Upload processing timed out",
       );
     } catch (error) {
-      const errorMessage = error?.message || "Something went wrong";
+      if (
+        RESUMABLE_SESSION_ERROR_CODES.has(error?.code) ||
+        Number(error?.status) === 401
+      ) {
+        localStorage.removeItem(resumeKey);
+      }
+
+      const errorMessage =
+        typeof error?.message === "string" && error.message.trim()
+          ? error.message.trim()
+          : "Upload failed. Please try again.";
+
       setMessage(errorMessage);
-      toast.error(errorMessage, { id: loadingToast });
+      toast.error("Upload failed", {
+        description: errorMessage,
+        id: loadingToast,
+      });
     } finally {
       setUploadProgressLabel("");
       setLoading(false);

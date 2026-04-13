@@ -2,6 +2,7 @@ import { after } from "next/server";
 import { NextResponse } from "next/server";
 
 import { getAuthorizedUserFromRequest } from "@/lib/api-route-auth";
+import { classifyUploadError } from "@/lib/upload-errors";
 import {
   createProcessingDataset,
   finalizeUploadSession,
@@ -12,13 +13,11 @@ export const runtime = "nodejs";
 
 export async function POST(req) {
   try {
-    const { errorResponse, supabase, user } = await getAuthorizedUserFromRequest(
-      req,
-      {
+    const { errorResponse, supabase, user } =
+      await getAuthorizedUserFromRequest(req, {
         missingTokenMessage: "Please sign in before uploading a dataset.",
         invalidTokenMessage: "Unauthorized",
-      },
-    );
+      });
 
     if (errorResponse) {
       return errorResponse;
@@ -28,7 +27,13 @@ export async function POST(req) {
     const sessionId = String(body?.sessionId || "").trim();
 
     if (!sessionId) {
-      return NextResponse.json({ error: "Missing session id" }, { status: 400 });
+      return NextResponse.json(
+        {
+          error: "Missing session id",
+          code: "UPLOAD_SESSION_ID_REQUIRED",
+        },
+        { status: 400 },
+      );
     }
 
     const session = await finalizeUploadSession({
@@ -51,7 +56,10 @@ export async function POST(req) {
           sessionId: session.sessionId,
         });
       } catch (error) {
-        console.error("Background upload processing failed:", error?.message || error);
+        console.error(
+          "Background upload processing failed:",
+          error?.message || error,
+        );
       }
     });
 
@@ -61,9 +69,24 @@ export async function POST(req) {
       processing: true,
     });
   } catch (error) {
+    const normalizedError = classifyUploadError(error, {
+      defaultStatus: 500,
+      defaultCode: "UPLOAD_COMPLETE_FAILED",
+      defaultMessage: "Unable to finalize upload right now. Please retry.",
+    });
+
+    if (normalizedError.status >= 500) {
+      console.error("[upload/complete]", normalizedError.code, {
+        message: normalizedError.debugMessage,
+      });
+    }
+
     return NextResponse.json(
-      { error: error?.message || "Unable to finalize upload" },
-      { status: 400 },
+      {
+        error: normalizedError.message,
+        code: normalizedError.code,
+      },
+      { status: normalizedError.status },
     );
   }
 }
