@@ -777,6 +777,18 @@ export default function UploadFile() {
       const initData = await initResponse.json().catch(() => ({}));
 
       if (!initResponse.ok) {
+        if (initResponse.status === 404) {
+          throw new Error(
+            "Upload init API route not found. Restart the Next server and try again.",
+          );
+        }
+
+        if (initResponse.status === 401) {
+          throw new Error(
+            initData.error || "Session expired. Please sign in again.",
+          );
+        }
+
         throw new Error(initData.error || "Unable to initialize upload");
       }
 
@@ -811,7 +823,11 @@ export default function UploadFile() {
         chunkFormData.append("sessionId", sessionId);
         chunkFormData.append("chunkIndex", String(chunkIndex));
         chunkFormData.append("totalChunks", String(totalChunks));
-        chunkFormData.append("chunk", chunkBlob, `${file.name}.part.${chunkIndex}`);
+        chunkFormData.append(
+          "chunk",
+          chunkBlob,
+          `${file.name}.part.${chunkIndex}`,
+        );
 
         const chunkResponse = await fetch("/api/upload/chunk", {
           method: "POST",
@@ -863,7 +879,9 @@ export default function UploadFile() {
       setLatestDataset({
         id: datasetId,
         fileName:
-          completeData?.dataset?.file_name || completeData?.dataset?.fileName || file.name,
+          completeData?.dataset?.file_name ||
+          completeData?.dataset?.fileName ||
+          file.name,
       });
 
       const pollStart = Date.now();
@@ -886,7 +904,9 @@ export default function UploadFile() {
         const statusData = await statusResponse.json().catch(() => ({}));
 
         if (!statusResponse.ok) {
-          throw new Error(statusData.error || "Unable to fetch processing status");
+          throw new Error(
+            statusData.error || "Unable to fetch processing status",
+          );
         }
 
         latestStatus = statusData;
@@ -898,7 +918,9 @@ export default function UploadFile() {
           const nextColumns = Array.isArray(statusData.columns)
             ? statusData.columns
             : [];
-          const nextRows = Array.isArray(statusData.rows) ? statusData.rows : [];
+          const nextRows = Array.isArray(statusData.rows)
+            ? statusData.rows
+            : [];
           const fallbackPreview = buildPreparedCharts(
             nextRelationships,
             nextRows,
@@ -908,8 +930,12 @@ export default function UploadFile() {
             statusData?.processedCharts?.charts,
           );
           const serverPreparedCharts = {
-            charts: hasServerPreparedCharts ? statusData.processedCharts.charts : [],
-            skipped: Number.isFinite(Number(statusData?.processedCharts?.skipped))
+            charts: hasServerPreparedCharts
+              ? statusData.processedCharts.charts
+              : [],
+            skipped: Number.isFinite(
+              Number(statusData?.processedCharts?.skipped),
+            )
               ? Number(statusData.processedCharts.skipped)
               : 0,
           };
@@ -926,7 +952,8 @@ export default function UploadFile() {
               ? Number(statusData.columnCount)
               : nextColumns.length,
             sheetName:
-              typeof statusData?.sheetName === "string" && statusData.sheetName.trim()
+              typeof statusData?.sheetName === "string" &&
+              statusData.sheetName.trim()
                 ? statusData.sheetName.trim()
                 : null,
           });
@@ -1094,9 +1121,7 @@ export default function UploadFile() {
               disabled={loading || !canUpload}
               className="w-full bg-gradient-to-r from-[#22D3EE] via-[#8B5CF6] to-[#F472B6] text-slate-950 font-semibold hover:opacity-90"
             >
-              {loading
-                ? uploadProgressLabel || "Uploading..."
-                : "Upload File"}
+              {loading ? uploadProgressLabel || "Uploading..." : "Upload File"}
             </Button>
 
             <Button
@@ -1156,8 +1181,6 @@ export default function UploadFile() {
 
             {preparedCharts.charts.length ? (
               <div className="space-y-6">
-              
-
                 <div className="grid gap-6 lg:grid-cols-2">
                   {preparedCharts.charts.map((chart, index) => (
                     <Card
