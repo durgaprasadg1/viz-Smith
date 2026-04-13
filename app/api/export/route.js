@@ -243,13 +243,15 @@ export async function POST(req) {
 
     if (storageError || !storedFile) {
       const message = String(storageError?.message || "").toLowerCase();
-      const missingObject =
-        message.includes("object") && message.includes("not")
+      const missingObject = message.includes("object") && message.includes("not")
           ? true
           : message.includes("not found");
 
+          console.log("error :" , storageError);
+
       return NextResponse.json(
         {
+          
           error: missingObject
             ? "Original uploaded file was not found in storage. Please re-upload this dataset and try export again."
             : storageError?.message || "Unable to download dataset",

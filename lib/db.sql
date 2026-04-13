@@ -204,3 +204,20 @@ create policy "Users can delete own dataset exports"
 on dataset_exports
 for delete
 using (auth.uid() = user_id::uuid);
+
+
+
+-- ==============
+-- Subscriptions
+-- ==============
+alter table profiles
+  add column if not exists subscription_type text 
+  check (subscription in ('free', 'silver', 'gold', 'platinum')) default 'free';
+
+alter table profiles
+  add column if not exists subscription_expires_at timestamptz;
+
+alter table profiles
+  add column if not exists trialsRemaining number default 2;
+
+
