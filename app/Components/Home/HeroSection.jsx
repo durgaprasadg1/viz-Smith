@@ -35,14 +35,7 @@ export default function HeroSection() {
               <Link href="/signup">Start Free Analysis</Link>
             </Button>
 
-            <Button
-              asChild
-              size="lg"
-              variant="secondary"
-              className="h-12 px-7 rounded-xl bg-white/8 text-white border border-white/10 hover:bg-white/12"
-            >
-              <Link href="/">Request Demo</Link>
-            </Button>
+            
           </div>
         </div>
 

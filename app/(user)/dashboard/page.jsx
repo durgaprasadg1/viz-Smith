@@ -4,7 +4,6 @@ import { useEffect, useState } from "react";
 import { formatDistanceToNow } from "date-fns";
 
 import DashboardLayout from "../../Components/DashBoard/DashboardLayout";
-import UsageBanner from "../../Components/DashBoard/UsageBanner";
 import WelcomeHeader from "../../Components/DashBoard/WelcomeHeader";
 import StatCard from "../../Components/DashBoard/StatCard";
 import UploadCard from "../../Components/DashBoard/UploadCard";
@@ -14,7 +13,6 @@ import useAuth from "@/hooks/useAuth";
 import { createSupabaseClient } from "@/lib/supabase";
 
 const supabase = createSupabaseClient();
-const FREE_TIER_UPLOAD_LIMIT = 500;
 
 function formatFileSize(bytes) {
   if (!Number.isFinite(Number(bytes))) return "Unknown size";

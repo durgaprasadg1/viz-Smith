@@ -37,7 +37,7 @@ import {
 
 const supabase = createSupabaseClient();
 // Keep chunks well below Vercel's 4.5MB function payload limit.
-const CHUNK_SIZE_BYTES = 1 * 1024 * 1024;
+const CHUNK_SIZE_BYTES =  1 * 1024 * 1024;
 const STATUS_POLL_INTERVAL_MS = 2000;
 const STATUS_POLL_TIMEOUT_MS = 1000 * 60 * 10;
 
@@ -258,7 +258,7 @@ function formatUploadErrorMessage({
 function createUploadRequestError({ stage, status, payload, fallbackMessage }) {
   const { code, message } = parseUploadApiError(payload);
   const error = new Error(
-    formatUploadErrorMessage({
+    formatUploadErrorMessage({ 
       stage,
       status,
       code,
@@ -935,7 +935,7 @@ export default function UploadFile() {
 
         const chunkStart = chunkIndex * CHUNK_SIZE_BYTES;
         const chunkEnd = Math.min(file.size, chunkStart + CHUNK_SIZE_BYTES);
-        const chunkBlob = file.slice(chunkStart, chunkEnd);
+        const chunkBlob = file.slice(chunkStart, chunkEnd); // Yaha Pe toda jaa rha hai file ko chhunks me aur bheja jaa rha hai  server ko 
         const chunkFormData = new FormData();
         chunkFormData.append("sessionId", sessionId);
         chunkFormData.append("chunkIndex", String(chunkIndex));
@@ -952,8 +952,11 @@ export default function UploadFile() {
           body: chunkFormData,
         });
 
+       
+
         const chunkData = await chunkResponse.json().catch(() => ({}));
 
+        console.log("Chunk response in chunk data : ", chunkData);
         if (!chunkResponse.ok) {
           throw createUploadRequestError({
             stage: "chunk",
@@ -978,6 +981,7 @@ export default function UploadFile() {
       });
 
       const completeData = await completeResponse.json().catch(() => ({}));
+      // console.log("Complete response in complete data : ", completeData);
 
       if (!completeResponse.ok) {
         throw createUploadRequestError({

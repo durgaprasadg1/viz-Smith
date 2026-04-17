@@ -228,7 +228,7 @@ export async function POST(req) {
 
     const { supabaseURL } = getEnvVar();
     const serviceRoleKey =
-      process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SERVICE_ROLE_KEY;
+      process.env.SUPABASE_SERVICE_ROLE_KEY ;
     const storageClient = serviceRoleKey
       ? createClient(supabaseURL, serviceRoleKey, {
           auth: {

@@ -14,6 +14,7 @@ import {
 import DashboardLayout from "../../Components/DashBoard/DashboardLayout";
 import DataTable from "../../Components/User/Table";
 import { Button } from "@/components/ui/button";
+
 import {
   Dialog,
   DialogContent,
@@ -99,12 +100,11 @@ export default function HistoryPage() {
 
   useEffect(() => {
     let isMounted = true;
-
     supabase.auth.getSession().then(({ data }) => {
       if (!isMounted) return;
       setAccessToken(data.session?.access_token ?? null);
     });
-
+    
     const { data: listener } = supabase.auth.onAuthStateChange(
       (_event, session) => {
         setAccessToken(session?.access_token ?? null);

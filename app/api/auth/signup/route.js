@@ -3,6 +3,7 @@ import { getEnvVar } from "@/lib/supabase";
 import { NextResponse } from "next/server";
 
 async function signUpNewUser(email, password, redirectTo, fullName) {
+  
   const { supabaseURL, supabaseAnonKey } = getEnvVar();
   const supabase = createClient(supabaseURL, supabaseAnonKey);
 

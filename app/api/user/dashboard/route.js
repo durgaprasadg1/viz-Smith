@@ -27,7 +27,7 @@ export async function GET(req) {
     const refreshRequested = req.nextUrl.searchParams.get("refresh") === "1";
     const cacheKey = getDashboardCacheKey(user.id);
 
-    let datasets = null;
+    // let datasets = null;
     let cacheStatus = "MISS";
 
     if (!refreshRequested) {
