@@ -80,12 +80,7 @@ const EXPORT_OPTIONS = [
     subtitle: "Report style document with complete table and all charts",
     icon: FileText,
   },
-  {
-    format: "ppt",
-    title: "Export as PPT",
-    subtitle: "Slides with full dataset table and chart visualizations",
-    icon: Presentation,
-  },
+  
 ];
 
 export default function HistoryPage() {
@@ -179,7 +174,7 @@ export default function HistoryPage() {
     return () => {
       active = false;
     };
-  }, [accessToken, authLoading, user]);
+  }, [accessToken, authLoading]);
 
   const openExportDialog = useCallback((dataset) => {
     setSelectedDataset(dataset);

@@ -26,10 +26,9 @@ export async function GET(req) {
 
     const refreshRequested = req.nextUrl.searchParams.get("refresh") === "1";
     const cacheKey = getHistoryCacheKey(user.id);
-
     let items = null;
     let cacheStatus = "MISS";
-
+    
     if (!refreshRequested) {
       items = await getJsonCache(cacheKey);
       if (items !== null) {
@@ -52,7 +51,7 @@ export async function GET(req) {
       await setJsonCache(cacheKey, items, CACHE_TTL_SECONDS.history);
       cacheStatus = refreshRequested ? "BYPASS" : "MISS";
     }
-
+  
     return NextResponse.json(
       {
         items: Array.isArray(items) ? items : [],
