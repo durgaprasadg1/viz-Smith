@@ -36,39 +36,4 @@ export function mapHistoryItem(item) {
   };
 }
 
-export function formatDate(value) {
-  if (!value) return "Unavailable";
 
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "Unavailable";
-
-  return format(date, "dd MMM yyyy");
-}
-
-export function formatUploadMoment(value) {
-  if (!value) return "Unavailable";
-
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "Unavailable";
-
-  return `${format(date, "hh:mm a")} · ${formatDistanceToNow(date, {
-    addSuffix: true,
-  })}`;
-}
-export function parseFilenameFromDisposition(disposition) {
-  if (!disposition) return null;
-
-  const utfMatch = disposition.match(/filename\*=UTF-8''([^;]+)/i);
-  if (utfMatch?.[1]) {
-    try {
-      return decodeURIComponent(utfMatch[1]);
-    } catch {
-      return utfMatch[1];
-    }
-  }
-
-  const regularMatch = disposition.match(/filename="?([^";]+)"?/i);
-  if (regularMatch?.[1]) return regularMatch[1];
-
-  return null;
-}
