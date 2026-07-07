@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
@@ -19,6 +19,9 @@ import AnimatedCharts from "@/app/Components/AnimatedCharts";
 import { ChevronLeft } from "lucide-react";
 import { FcGoogle } from "react-icons/fc";
 import { FaGithub } from "react-icons/fa";
+import useAuthenticatedRedirect from "@/hooks/useAuthenticatedRedirect";
+import { getErrorMessage, updateFormField } from "../../../utils/auth-form-utils";
+
 
 const supabase = createSupabaseClient();
 
@@ -30,41 +33,9 @@ export default function LoginPage() {
   });
   const [loading, setLoading] = useState(false);
 
-  useEffect(() => {
-    let isMounted = true;
+  useAuthenticatedRedirect(supabase, router);
 
-    supabase.auth.getSession().then(({ data }) => {
-      if (!isMounted) return;
-      if (data.session) {
-        router.replace("/dashboard");
-      }
-    });
-
-    const { data: listener } = supabase.auth.onAuthStateChange(
-      (_event, session) => {
-        if (session && isMounted) {
-          try {
-            router.replace("/dashboard");
-          } catch (err) {
-            // router may not be ready yet in some Next.js boot paths
-            console.warn("Router replace skipped:", err);
-          }
-        }
-      },
-    );
-
-    return () => {
-      isMounted = false;
-      listener.subscription.unsubscribe();
-    };
-  }, [router]);
-
-  const handleChange = (e) => {
-    setFormData((prev) => ({
-      ...prev,
-      [e.target.name]: e.target.value,
-    }));
-  };
+  const handleChange = (event) => updateFormField(setFormData, event);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -82,7 +53,7 @@ export default function LoginPage() {
       router.replace("/dashboard");
     } catch (error) {
       console.error("Login error:", error);
-      toast.error(error?.message ?? "Something went wrong");
+      toast.error(getErrorMessage(error, "Something went wrong"));
     } finally {
       setLoading(false);
     }

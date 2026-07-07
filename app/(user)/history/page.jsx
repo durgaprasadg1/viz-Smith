@@ -27,49 +27,23 @@ import { Spinner } from "@/components/ui/spinner";
 import useAuth from "@/hooks/useAuth";
 import { createSupabaseClient } from "@/lib/supabase";
 import { toast } from "sonner";
+import {
+  extensionFromFormat as getExportExtension,
+  mapHistoryItem,
+  parseFilenameFromDisposition as getExportFilename,
+  formatDate,
+  formatUploadMoment,
+  parseFilenameFromDisposition
+
+} from "../../../utils/history-utils";
 
 const supabase = createSupabaseClient();
 
-function formatDate(value) {
-  if (!value) return "Unavailable";
 
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "Unavailable";
 
-  return format(date, "dd MMM yyyy");
-}
 
-function formatUploadMoment(value) {
-  if (!value) return "Unavailable";
-
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "Unavailable";
-
-  return `${format(date, "hh:mm a")} · ${formatDistanceToNow(date, {
-    addSuffix: true,
-  })}`;
-}
-
-function parseFilenameFromDisposition(disposition) {
-  if (!disposition) return null;
-
-  const utfMatch = disposition.match(/filename\*=UTF-8''([^;]+)/i);
-  if (utfMatch?.[1]) {
-    try {
-      return decodeURIComponent(utfMatch[1]);
-    } catch {
-      return utfMatch[1];
-    }
-  }
-
-  const regularMatch = disposition.match(/filename="?([^";]+)"?/i);
-  if (regularMatch?.[1]) return regularMatch[1];
-
-  return null;
-}
 
 function extensionFromFormat(format) {
-  if (format === "ppt") return "pptx";
   return "pdf";
 }
 
@@ -80,12 +54,7 @@ const EXPORT_OPTIONS = [
     subtitle: "Report style document with complete table and all charts",
     icon: FileText,
   },
-  {
-    format: "ppt",
-    title: "Export as PPT",
-    subtitle: "Slides with full dataset table and chart visualizations",
-    icon: Presentation,
-  },
+  
 ];
 
 export default function HistoryPage() {
@@ -160,15 +129,7 @@ export default function HistoryPage() {
         return;
       }
 
-      const mappedRows = (payload?.items || []).map((item) => ({
-        id: item.id,
-        date: item.created_at || item.uploaded_at || "",
-        uploadedAt: item.uploaded_at || item.created_at || "",
-        fileName: item.file_name,
-        dateLabel: formatDate(item.created_at || item.uploaded_at),
-        uploadedLabel: formatUploadMoment(item.uploaded_at || item.created_at),
-        statusLabel: item.status ? String(item.status).toUpperCase() : "READY",
-      }));
+      const mappedRows = (payload?.items || []).map(mapHistoryItem);
 
       setHistoryRows(mappedRows);
       setLoadingHistory(false);
@@ -225,7 +186,7 @@ export default function HistoryPage() {
 
         const blob = await response.blob();
         const disposition = response.headers.get("content-disposition");
-        const headerFileName = parseFilenameFromDisposition(disposition);
+        const headerFileName = getExportFilename(disposition);
 
         const fallbackBaseName = String(selectedDataset.fileName || "dataset")
           .replace(/\.[^/.]+$/, "")
@@ -233,7 +194,7 @@ export default function HistoryPage() {
 
         const downloadName =
           headerFileName ||
-          `${fallbackBaseName}.${extensionFromFormat(format)}`;
+          `${fallbackBaseName}.${getExportExtension(format)}`;
 
         const blobUrl = URL.createObjectURL(blob);
         const link = document.createElement("a");

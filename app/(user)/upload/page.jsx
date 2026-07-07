@@ -56,11 +56,11 @@ const EXPORT_OPTIONS = [
     title: "Export as PDF",
     subtitle: "Report style document with complete table and all charts",
   },
-  {
-    format: "ppt",
-    title: "Export as PPT",
-    subtitle: "Slides with full dataset table and chart visualizations",
-  },
+  // {
+  //   format: "ppt",
+  //   title: "Export as PPT",
+  //   subtitle: "Slides with full dataset table and chart visualizations",
+  // },
 ];
 
 const CHART_INITIAL_DIMENSION = {
