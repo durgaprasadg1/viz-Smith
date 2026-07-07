@@ -12,6 +12,11 @@ export async function GET() {
     .select("id")
     .limit(1);
 
+    data = {
+      "A" : 1,
+      "B" : 2
+    }
+    setJsonCache(1, data,60)
   if (error) {
     return NextResponse.json(
       { success: false, error: error.message },

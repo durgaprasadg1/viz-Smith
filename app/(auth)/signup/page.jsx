@@ -20,7 +20,7 @@ import { ChevronLeft } from "lucide-react";
 import { FcGoogle } from "react-icons/fc";
 import { FaGithub } from "react-icons/fa";
 import useAuthenticatedRedirect from "@/hooks/useAuthenticatedRedirect";
-import { getErrorMessage, updateFormField } from "../auth-form-utils";
+import { getErrorMessage, updateFormField } from "../../../utils/auth-form-utils";
 
 const supabase = createSupabaseClient();
 
