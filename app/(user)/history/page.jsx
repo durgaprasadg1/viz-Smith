@@ -140,7 +140,7 @@ export default function HistoryPage() {
     return () => {
       active = false;
     };
-  }, [accessToken, authLoading, user]);
+  }, [accessToken, authLoading]);
 
   const openExportDialog = useCallback((dataset) => {
     setSelectedDataset(dataset);
