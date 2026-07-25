@@ -79,68 +79,39 @@ flowchart LR
 ```mermaid
 sequenceDiagram
     participant U as User
-    participant C as Client (ResumableUploader)
-    participant A as API (/api/upload/*)
-    participant S as Supabase Storage
-    participant Q as BullMQ Queue
-    participant W as Upload Worker
-    participant AI as Grok API
-    participant D as Supabase DB
-    participant R as Redis Cache
+    participant A as API
+    participant Q as Queue/Worker
+    participant D as DB/Cache
 
-    U->>C: Selects CSV/XLSX file
-    C->>A: POST /api/upload/init (fileName, size, chunks)
-    A-->>C: sessionId, chunkSize, uploadedChunkIndexes
-    loop each chunk
-      C->>A: POST /api/upload/chunk
-      A->>S: store chunk
-    end
-    C->>A: POST /api/upload/complete
-    A->>S: upload assembled file
-    A->>Q: enqueue process-upload job
-    A->>R: invalidate dashboard/history cache
-    A-->>C: 200 OK (processing queued)
-
-    Q->>W: deliver job
-    W->>S: download/assemble file
-    W->>W: parse + infer schema
-    W->>AI: request chart/relationship suggestions
-    AI-->>W: JSON chart suggestions (or fallback)
-    W->>S: write Arrow columnar file
-    W->>D: update dataset status = ready, metadata
-
-    U->>C: Opens dashboard
-    C->>A: GET /api/user/dashboard
-    A->>R: check cache
-    alt cache hit
-      R-->>A: cached dataset list
-    else cache miss
-      A->>D: query datasets
-      A->>R: populate cache (TTL)
-    end
-    A-->>C: dataset list + status
+    U->>A: Upload file (chunked)
+    A->>Q: Enqueue processing job
+    Q->>Q: Parse + AI chart suggestions
+    Q->>D: Save analysis, mark ready
+    U->>A: GET dashboard
+    A->>D: Cached read (Redis/Supabase)
+    A-->>U: Dataset list + status
 ```
 
 ---
 
 ## Tech Stack
 
-| Layer | Technology | Purpose |
-|---|---|---|
-| Frontend | Next.js 16 (App Router), React 19 | Routing, server/client components, UI |
-| Styling/UI | Tailwind CSS 4, MUI, Radix UI, shadcn-derived components | Component library and design system |
-| Charting (client) | Recharts, Chart.js | In-app interactive chart rendering |
-| Charting (server) | Chart.js + `chartjs-node-canvas` (via `canvas`) | Headless chart rendering for PDF export |
-| Auth & DB | Supabase (Postgres + Auth) | User accounts, row-level-secured dataset storage |
-| File storage | Supabase Storage | Raw uploads, assembled chunk uploads, Arrow files |
-| Background jobs | BullMQ + Redis | Decouples heavy file processing from the request/response cycle |
-| Caching | `redis` client, custom read-through helpers (`lib/redis-cache.js`) | TTL-based caching of dashboard/history/dataset reads |
-| Columnar format | Apache Arrow (`apache-arrow`) | Efficient, schema-stable representation of parsed datasets |
-| File parsing | `csv-parse`, `xlsx` | CSV and Excel ingestion |
-| AI | xAI Grok Chat Completions API (raw `fetch`, no SDK) | Suggests chart types/column relationships from a data sample |
-| PDF export | `jspdf`, `jspdf-autotable` | Generates the exported report with embedded chart images |
-| Forms | `@tanstack/react-form` | Auth and upload form state |
-| Tables | `@tanstack/react-table` | History/dataset row browsing |
+| Layer             | Technology                                                         | Purpose                                                         |
+| ----------------- | ------------------------------------------------------------------ | --------------------------------------------------------------- |
+| Frontend          | Next.js 16 (App Router), React 19                                  | Routing, server/client components, UI                           |
+| Styling/UI        | Tailwind CSS 4, MUI, Radix UI, shadcn-derived components           | Component library and design system                             |
+| Charting (client) | Recharts, Chart.js                                                 | In-app interactive chart rendering                              |
+| Charting (server) | Chart.js + `chartjs-node-canvas` (via `canvas`)                    | Headless chart rendering for PDF export                         |
+| Auth & DB         | Supabase (Postgres + Auth)                                         | User accounts, row-level-secured dataset storage                |
+| File storage      | Supabase Storage                                                   | Raw uploads, assembled chunk uploads, Arrow files               |
+| Background jobs   | BullMQ + Redis                                                     | Decouples heavy file processing from the request/response cycle |
+| Caching           | `redis` client, custom read-through helpers (`lib/redis-cache.js`) | TTL-based caching of dashboard/history/dataset reads            |
+| Columnar format   | Apache Arrow (`apache-arrow`)                                      | Efficient, schema-stable representation of parsed datasets      |
+| File parsing      | `csv-parse`, `xlsx`                                                | CSV and Excel ingestion                                         |
+| AI                | xAI Grok Chat Completions API (raw `fetch`, no SDK)                | Suggests chart types/column relationships from a data sample    |
+| PDF export        | `jspdf`, `jspdf-autotable`                                         | Generates the exported report with embedded chart images        |
+| Forms             | `@tanstack/react-form`                                             | Auth and upload form state                                      |
+| Tables            | `@tanstack/react-table`                                            | History/dataset row browsing                                    |
 
 > Note: `groq-sdk` and `pptxgenjs` are present in `package.json` but are not wired into any executed code path — see [Known Limitations](#known-limitations).
 
@@ -230,20 +201,20 @@ The separation between `app/api` (thin route handlers), `lib/` (pure/business lo
 
 ## API Design
 
-| Method | Endpoint | Description | Auth |
-|---|---|---|---|
-| POST | `/api/auth/login` | Email/password sign-in via Supabase Auth | No |
-| POST | `/api/auth/signup` | New user registration | No |
-| POST | `/api/upload` | Single-shot or chunk-aware upload (legacy/simple path) | Yes |
-| POST | `/api/upload/init` | Start or resume a chunked upload session | Yes |
-| POST | `/api/upload/chunk` | Upload one chunk of a session | Yes |
-| POST | `/api/upload/complete` | Finalize a chunked session, enqueue processing | Yes |
-| GET | `/api/upload/status` | Poll processing status of a dataset | Yes |
-| GET | `/api/user/dashboard` | List the user's datasets (Redis-cached) | Yes |
-| GET | `/api/user/history` | Paginated dataset history (Redis-cached) | Yes |
-| GET | `/api/dataset/rows` | Fetch rows for a processed dataset | Yes |
-| POST | `/api/export` | Generate a PDF export for a dataset | Yes |
-| GET | `/api/stay-awake` | Keep-alive endpoint for the Supabase project | No |
+| Method | Endpoint               | Description                                            | Auth |
+| ------ | ---------------------- | ------------------------------------------------------ | ---- |
+| POST   | `/api/auth/login`      | Email/password sign-in via Supabase Auth               | No   |
+| POST   | `/api/auth/signup`     | New user registration                                  | No   |
+| POST   | `/api/upload`          | Single-shot or chunk-aware upload (legacy/simple path) | Yes  |
+| POST   | `/api/upload/init`     | Start or resume a chunked upload session               | Yes  |
+| POST   | `/api/upload/chunk`    | Upload one chunk of a session                          | Yes  |
+| POST   | `/api/upload/complete` | Finalize a chunked session, enqueue processing         | Yes  |
+| GET    | `/api/upload/status`   | Poll processing status of a dataset                    | Yes  |
+| GET    | `/api/user/dashboard`  | List the user's datasets (Redis-cached)                | Yes  |
+| GET    | `/api/user/history`    | Paginated dataset history (Redis-cached)               | Yes  |
+| GET    | `/api/dataset/rows`    | Fetch rows for a processed dataset                     | Yes  |
+| POST   | `/api/export`          | Generate a PDF export for a dataset                    | Yes  |
+| GET    | `/api/stay-awake`      | Keep-alive endpoint for the Supabase project           | No   |
 
 Auth is enforced per-route via `getAuthorizedUserFromRequest` (`lib/api-route-auth.js`), which resolves a `Bearer` token to a Supabase user and rejects the request with `401` if the token is missing or invalid. There is no separate OpenAPI/Swagger document in the repository.
 
@@ -312,6 +283,7 @@ Notable schema decisions visible in `lib/db.sql`:
 ## Security
 
 **Implemented:**
+
 - Server-side re-validation of bearer tokens on every protected route (no trusting client-asserted identity).
 - Database-level row-level security scoping all dataset/export access to the owning user.
 - File type/extension allow-listing and a 50MB size cap on uploads (`ALLOWED_TYPES`, `MAX_FILE_SIZE` in `lib/dataset-analysis.js`).
@@ -319,6 +291,7 @@ Notable schema decisions visible in `lib/db.sql`:
 - Service-role (privileged) Supabase key usage is isolated to a single export code path rather than used broadly.
 
 **Not implemented / not verifiable from the repository:**
+
 - No visible rate limiting on auth or upload endpoints.
 - No CSRF protection layer beyond what Next.js/Supabase provide by default.
 - No explicit CORS configuration was found in the codebase.
@@ -329,6 +302,7 @@ Notable schema decisions visible in `lib/db.sql`:
 ## Performance & Scalability
 
 **Implemented:**
+
 - Heavy work (parsing, AI calls, Arrow conversion) is offloaded to a BullMQ worker so API responses aren't blocked on it.
 - Streaming Arrow conversion (`convertRowsToArrowStreamBuffer`, batch size 5000) avoids holding the entire dataset as JS arrays in memory during conversion, with an in-memory fallback if streaming fails.
 - Redis read-through caching (with TTLs configurable per-endpoint via `CACHE_TTL_DASHBOARD_SECONDS`, `CACHE_TTL_HISTORY_SECONDS`, `CACHE_TTL_DATASET_SECONDS`) reduces repeated Supabase reads on hot paths.
@@ -369,6 +343,7 @@ This is called out explicitly under [Known Limitations](#known-limitations) rath
 ## Local Development
 
 **Prerequisites:**
+
 - Node.js (compatible with Next.js 16 / React 19)
 - A Supabase project (Postgres + Auth + Storage)
 - A Redis instance (for both caching and the BullMQ queue)
@@ -429,17 +404,17 @@ CACHE_TTL_DATASET_SECONDS=
 UPLOAD_SESSIONS_ROOT=
 ```
 
-| Variable | Required | Purpose |
-|---|---|---|
-| `NEXT_PUBLIC_SUPABASE_URL` | Yes | Supabase project URL (client + server) |
-| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Yes | Public anon key for client-side/session-scoped Supabase calls |
-| `SUPABASE_SERVICE_ROLE_KEY` / `SERVICE_ROLE_KEY` | Yes (for export) | Privileged key used server-side to read storage objects during export, bypassing RLS |
-| `REDIS_URL` (or `REDIS_HOST`/`REDIS_PORT`/`REDIS_PASSWORD`) | Yes | Connection for both the BullMQ queue and the Redis cache |
-| `GROK_API_KEY` | No | Enables AI-based chart/relationship suggestions; falls back gracefully if unset |
-| `GROK_TIMEOUT_MS` / `AI_REQUEST_TIMEOUT_MS` | No | Timeout for the Grok API call (defaults to 18s) |
-| `AI_RELATIONSHIP_TARGET` | No | Max number of chart relationships requested from the AI (default 40) |
-| `CACHE_TTL_*` | No | Per-endpoint Redis cache TTLs in seconds (default 600) |
-| `UPLOAD_SESSIONS_ROOT` | No | Referenced by the upload optimization module; controls where session bookkeeping is scoped |
+| Variable                                                    | Required         | Purpose                                                                                    |
+| ----------------------------------------------------------- | ---------------- | ------------------------------------------------------------------------------------------ |
+| `NEXT_PUBLIC_SUPABASE_URL`                                  | Yes              | Supabase project URL (client + server)                                                     |
+| `NEXT_PUBLIC_SUPABASE_ANON_KEY`                             | Yes              | Public anon key for client-side/session-scoped Supabase calls                              |
+| `SUPABASE_SERVICE_ROLE_KEY` / `SERVICE_ROLE_KEY`            | Yes (for export) | Privileged key used server-side to read storage objects during export, bypassing RLS       |
+| `REDIS_URL` (or `REDIS_HOST`/`REDIS_PORT`/`REDIS_PASSWORD`) | Yes              | Connection for both the BullMQ queue and the Redis cache                                   |
+| `GROK_API_KEY`                                              | No               | Enables AI-based chart/relationship suggestions; falls back gracefully if unset            |
+| `GROK_TIMEOUT_MS` / `AI_REQUEST_TIMEOUT_MS`                 | No               | Timeout for the Grok API call (defaults to 18s)                                            |
+| `AI_RELATIONSHIP_TARGET`                                    | No               | Max number of chart relationships requested from the AI (default 40)                       |
+| `CACHE_TTL_*`                                               | No               | Per-endpoint Redis cache TTLs in seconds (default 600)                                     |
+| `UPLOAD_SESSIONS_ROOT`                                      | No               | Referenced by the upload optimization module; controls where session bookkeeping is scoped |
 
 No secret values are included above — only variable names, matching what the code actually reads.
 
@@ -472,16 +447,16 @@ No dedicated logging, monitoring, error-tracking, or tracing integration (e.g., 
 ## Challenges & Technical Learnings
 
 **Making large-file uploads resilient without a managed upload service**
-*Approach:* Implemented resumable chunked uploads with server-tracked sessions and an idempotent file key so a client can resume rather than restart (`lib/upload-optimization.js`, `app/api/upload/{init,chunk,complete,status}`).
-*Result:* Upload reliability no longer depends on a single long-lived request succeeding end-to-end.
+_Approach:_ Implemented resumable chunked uploads with server-tracked sessions and an idempotent file key so a client can resume rather than restart (`lib/upload-optimization.js`, `app/api/upload/{init,chunk,complete,status}`).
+_Result:_ Upload reliability no longer depends on a single long-lived request succeeding end-to-end.
 
 **Keeping AI-assisted analysis from being a single point of failure**
-*Approach:* Wrapped the Grok API call in a timeout, bounded retries with backoff, and a deterministic fallback relationship generator so the pipeline always produces some usable chart output even if the AI call fails entirely.
-*Result:* Dataset processing degrades gracefully instead of getting stuck in `processing`/`failed` whenever the third-party AI service is slow or unavailable.
+_Approach:_ Wrapped the Grok API call in a timeout, bounded retries with backoff, and a deterministic fallback relationship generator so the pipeline always produces some usable chart output even if the AI call fails entirely.
+_Result:_ Dataset processing degrades gracefully instead of getting stuck in `processing`/`failed` whenever the third-party AI service is slow or unavailable.
 
 **Rolling out caching without introducing silent staleness**
-*Approach:* Rather than adding Redis caching ad hoc, the rollout was scoped and tracked as a checklist (`plan.md`) — specific read paths, specific invalidation rules, and an explicit fail-open policy if Redis itself is unavailable.
-*Result:* Caching was added incrementally with a documented trail of which invalidation rules exist and which QA/telemetry steps are still outstanding (visible as unchecked items in `plan.md`).
+_Approach:_ Rather than adding Redis caching ad hoc, the rollout was scoped and tracked as a checklist (`plan.md`) — specific read paths, specific invalidation rules, and an explicit fail-open policy if Redis itself is unavailable.
+_Result:_ Caching was added incrementally with a documented trail of which invalidation rules exist and which QA/telemetry steps are still outstanding (visible as unchecked items in `plan.md`).
 
 ---
 
@@ -524,14 +499,14 @@ Trade-off: The `ppt` format is validated and stored as an option (API, DB check 
 
 ## Future Improvements
 
-| Current Limitation | Proposed Improvement | Expected Benefit |
-|---|---|---|
-| No automated tests | Add unit tests for `lib/dataset-analysis.js`/`lib/chart-preparation.js` and integration tests for upload → processing → export | Confidence in refactors, regression detection before deploy |
-| PPT export unimplemented | Implement the `ppt` branch in `buildExportFile` using the existing `pptxgenjs` dependency | Delivers on the format already exposed in the API/schema |
-| No CI pipeline | Add a GitHub Actions workflow running `npm run lint` and `npm run build` on PRs | Catches build/lint breakage before merge |
-| No observability | Integrate structured logging and error tracking (e.g., Sentry) in both the API routes and the worker | Faster diagnosis of failed dataset processing in production |
-| Manual cache invalidation | Add integration checks for Redis hit/miss behavior (already planned in `plan.md`) and consider stampede protection | Fewer stale-cache and thundering-herd bugs as traffic grows |
-| Single worker process | Document/support running multiple `upload-processor` instances against the same queue | Higher processing throughput under load |
+| Current Limitation        | Proposed Improvement                                                                                                           | Expected Benefit                                            |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------- |
+| No automated tests        | Add unit tests for `lib/dataset-analysis.js`/`lib/chart-preparation.js` and integration tests for upload → processing → export | Confidence in refactors, regression detection before deploy |
+| PPT export unimplemented  | Implement the `ppt` branch in `buildExportFile` using the existing `pptxgenjs` dependency                                      | Delivers on the format already exposed in the API/schema    |
+| No CI pipeline            | Add a GitHub Actions workflow running `npm run lint` and `npm run build` on PRs                                                | Catches build/lint breakage before merge                    |
+| No observability          | Integrate structured logging and error tracking (e.g., Sentry) in both the API routes and the worker                           | Faster diagnosis of failed dataset processing in production |
+| Manual cache invalidation | Add integration checks for Redis hit/miss behavior (already planned in `plan.md`) and consider stampede protection             | Fewer stale-cache and thundering-herd bugs as traffic grows |
+| Single worker process     | Document/support running multiple `upload-processor` instances against the same queue                                          | Higher processing throughput under load                     |
 
 ---
 
@@ -551,14 +526,14 @@ Trade-off: The `ppt` format is validated and stored as an option (API, DB check 
 
 ## Production Readiness
 
-| Area | Current State | Improvement |
-|---|---|---|
-| Testing | No automated tests of any kind | Add unit + integration test coverage, wire into CI |
-| Security | Token re-validation + RLS in place; no rate limiting or CORS/CSRF hardening found | Add rate limiting on auth/upload routes, review CORS policy |
-| Scalability | Background processing exists but runs as a single worker; no cache stampede protection | Support multi-instance workers; add cache locking on miss |
-| Observability | Console logging only; `status` field as the only health signal | Add structured logging and error tracking |
-| CI/CD | One cron-based keep-alive workflow; no lint/test/build pipeline | Add a standard CI workflow gating merges |
-| Reliability | Fail-open Redis, AI retry/fallback, and PDF export fallback are all implemented | Add worker-level alerting/dead-letter handling for repeatedly failed jobs |
+| Area          | Current State                                                                          | Improvement                                                               |
+| ------------- | -------------------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
+| Testing       | No automated tests of any kind                                                         | Add unit + integration test coverage, wire into CI                        |
+| Security      | Token re-validation + RLS in place; no rate limiting or CORS/CSRF hardening found      | Add rate limiting on auth/upload routes, review CORS policy               |
+| Scalability   | Background processing exists but runs as a single worker; no cache stampede protection | Support multi-instance workers; add cache locking on miss                 |
+| Observability | Console logging only; `status` field as the only health signal                         | Add structured logging and error tracking                                 |
+| CI/CD         | One cron-based keep-alive workflow; no lint/test/build pipeline                        | Add a standard CI workflow gating merges                                  |
+| Reliability   | Fail-open Redis, AI retry/fallback, and PDF export fallback are all implemented        | Add worker-level alerting/dead-letter handling for repeatedly failed jobs |
 
 ---
 
