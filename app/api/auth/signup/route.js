@@ -26,6 +26,8 @@ async function signUpNewUser(email, password, redirectTo, fullName) {
 
 export async function POST(request) {
   try {
+
+    //registering user 
     const { email, password, name } = await request.json();
 
     if (!email || !password) {
@@ -44,6 +46,8 @@ export async function POST(request) {
       { status: 200 },
     );
   } catch (error) {
+
+    // new user signup catch 
     return NextResponse.json(
       { error: error?.message ?? "Signup Failed" },
       { status: 400 },
