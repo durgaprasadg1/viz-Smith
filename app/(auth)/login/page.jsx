@@ -50,7 +50,7 @@ export default function LoginPage() {
       }
 
       toast.success("Logged in successfully");
-      router.replace("/dashboard");
+      router.replace("/");
     } catch (error) {
       console.error("Login error:", error);
       toast.error(getErrorMessage(error, "Something went wrong"));

@@ -35,7 +35,7 @@ export async function POST(request) {
       );
     }
 
-    const redirectTo = new URL("/dashboard", request.url).toString();
+    const redirectTo = new URL("/", request.url).toString();
 
     const data = await signUpNewUser(email, password, redirectTo, name);
 

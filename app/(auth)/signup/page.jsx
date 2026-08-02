@@ -77,7 +77,7 @@ export default function SignupPage() {
       }
 
       toast.success("Account created and signed in");
-      router.replace("/dashboard");
+      router.replace("/");
     } catch (error) {
       console.error("Signup error:", error);
       toast.error(getErrorMessage(error, "Something went wrong"));
