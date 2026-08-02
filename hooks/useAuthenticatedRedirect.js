@@ -7,12 +7,12 @@ export default function useAuthenticatedRedirect(supabase, router) {
     let isMounted = true;
 
     supabase.auth.getSession().then(({ data }) => {
-      if (isMounted && data.session) router.replace("/dashboard");
+      if (isMounted && data.session) router.replace("/");
     });
 
     const { data: listener } = supabase.auth.onAuthStateChange(
       (_event, session) => {
-        if (session && isMounted) router.replace("/dashboard");
+        if (session && isMounted) router.replace("/");
       },
     );
 
