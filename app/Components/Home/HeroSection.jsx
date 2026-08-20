@@ -32,7 +32,7 @@ export default function HeroSection() {
               size="lg"
               className="h-12 px-7 rounded-xl bg-gradient-to-r from-[#A78BFA] to-[#6366F1] text-white shadow-[0_0_40px_rgba(139,92,246,0.35)] hover:opacity-95"
             >
-              <Link href="/signup">Start Free Analysis</Link>
+              <Link href="/dashboard">Start Free Analysis</Link>
             </Button>
 
             
